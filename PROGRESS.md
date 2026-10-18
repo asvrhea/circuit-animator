@@ -1,18 +1,23 @@
 # Progress
 
 ## Done
-- Phase 1 Scaffold: Vite 6 + TS 5 (strict) + Vitest 3. `index.html` grid layout
-  (topbar / stage canvas / side panel, stacks under 760px), dark broadcast CSS tokens,
-  DPR-aware canvas placeholder in `src/main.ts`, `src/geom/vec2.ts` + test. Build green.
+- Phase 1 Scaffold: Vite 6 + TS 5 strict + Vitest 3, responsive dark layout, canvas placeholder.
+- Phase 2 Extraction (28 tests green, build green):
+  - `vision/color` HSV mask + slider→tolerance + eyedropper (most-saturated px nearby).
+  - `vision/morph` close via chamfer distance transform (disk-like; square kernel failed on diagonals).
+  - `vision/components` largest 8-connected; `vision/skeleton` Zhang–Suen (active-pixel list).
+  - `vision/loop` topology graph (junction clusters merged ≤10px) → 2-core spur prune →
+    straight-through Euler walk (figure-eight) else longest simple cycle; open line → longest path, joined.
+  - `vision/extract` pipeline; retries close radius r, 2r, 3r if loop stays open; confidence score + hints.
+  - `geom/` polyline, RDP (closed), arc-length resample, centripetal Catmull–Rom, `pathFromControls`.
+  - `tests/helpers/synth.ts` synthetic map: loop on noise + gap + crossing road + stray blob.
 
 ## Next
-- Phase 2 Extraction: `src/vision/` mask (HSV tolerance), morphological close,
-  largest component, Zhang–Suen skeleton, loop ordering (spur prune, longest cycle,
-  open-end join), RDP + arc-length resample (~500) + closed Catmull–Rom.
-  Synthetic test image generator in `tests/` (loop on noise, gap, crossing road).
-- After Phase 2: ask user for a real screenshot to tune detection.
+- Tune on a real screenshot from the user (pending).
+- Phase 3: upload/drag-drop, downscale to ≤1600px, eyedropper UI, tolerance slider, overlay on dimmed
+  screenshot + confidence, KML/GPX + Mercator, manual trace, editor, start line, sectors, JSON save/load.
 
 ## Open issues / env notes
-- Node 24 + Git installed via winget this session; new shells need PATH refreshed
-  (`$env:Path = Machine;User`) until the app restarts.
-- npm 11 blocks install scripts by default; esbuild approved via `npm install-scripts approve`.
+- Large close radius could merge parallel straights; only used on retry when the loop is open.
+- Euler walk is preferred whenever the core has all-even degrees (could include small extra loops).
+- Node/Git installed via winget; refresh PATH in new shells (`Machine;User`). esbuild install script approved.
