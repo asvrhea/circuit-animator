@@ -247,6 +247,10 @@ input[type='range'] { width: 100%; accent-color: var(--accent); }
 .help { margin: 0 0 10px; color: var(--muted); font-size: 14px; }
 .stats { display: flex; flex-wrap: wrap; gap: 4px 14px; margin-top: 10px; color: var(--muted); font-size: 14px; }
 .stats b { color: var(--text); }
+.stats .warn { color: var(--warn); }
+.calib { margin-top: 8px; padding: 10px; background: var(--bg); border-left: 3px solid var(--accent); }
+.calib .help { margin: 0; }
+.calib .field + .help { margin-top: 6px; }
 
 /* ---------- tabs / animate ---------- */
 .tabs { display: grid; grid-template-columns: 1fr 1fr; border-bottom: 1px solid var(--line); }

@@ -14,6 +14,8 @@ export interface EditorScene {
   /** index of hovered / dragged control, or -1 */
   hot: number;
   trace: Vec2[];
+  /** calibration points A, B */
+  measure: Vec2[];
 }
 
 type Ctx = CanvasRenderingContext2D;
@@ -37,6 +39,38 @@ export function drawEditor(ctx: Ctx, w: number, h: number, view: View, s: Editor
   if (s.path.length > 2) drawTrack(ctx, view, s.path, s.sectors);
   if (s.trace.length) drawTrace(ctx, view, s.trace);
   if (s.showControls) drawControls(ctx, view, s.controls, s.hot);
+  if (s.measure.length) drawMeasure(ctx, view, s.measure);
+}
+
+function drawMeasure(ctx: Ctx, view: View, pts: Vec2[]): void {
+  const sp = pts.map((p) => view.toScreen(p));
+  if (sp.length === 2) {
+    ctx.setLineDash([7, 5]);
+    ctx.strokeStyle = '#000';
+    ctx.lineWidth = 4;
+    ctx.beginPath();
+    ctx.moveTo(sp[0].x, sp[0].y);
+    ctx.lineTo(sp[1].x, sp[1].y);
+    ctx.stroke();
+    ctx.strokeStyle = '#fff';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
+  sp.forEach((p, i) => {
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, 7, 0, Math.PI * 2);
+    ctx.fillStyle = THEME.accent;
+    ctx.fill();
+    ctx.strokeStyle = '#fff';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    ctx.fillStyle = '#fff';
+    ctx.font = `800 10px ${THEME.font}`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(i ? 'B' : 'A', p.x, p.y + 0.5);
+  });
 }
 
 function drawGrid(ctx: Ctx, w: number, h: number, view: View): void {

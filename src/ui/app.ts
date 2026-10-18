@@ -6,7 +6,9 @@ import { polylineLength } from '../geom/polyline';
 import { pathFromControls } from '../geom/track';
 import { dist, type Vec2 } from '../geom/vec2';
 import { geoToTrack, parseGeoFile } from '../io/geo';
-import { DEFAULT_SECTORS, newDoc, parseDoc, serializeDoc, type TrackDoc } from '../io/trackFile';
+import {
+  calibrate, DEFAULT_SECTORS, newDoc, parseDoc, serializeDoc, syncLength, withLength, type TrackDoc,
+} from '../io/trackFile';
 import { drawEditor } from '../render/editor';
 import { boundsOf, View } from '../render/view';
 import { sampleColor, toleranceFromSlider } from '../vision/color';
@@ -15,7 +17,7 @@ import type { RGB } from '../vision/types';
 import { Animator } from './animator';
 import { download, fileKind, loadImage, store } from './files';
 
-type Mode = 'edit' | 'pick' | 'trace' | 'start' | 'split0' | 'split1';
+type Mode = 'edit' | 'pick' | 'trace' | 'start' | 'split0' | 'split1' | 'calibrate';
 
 type Gesture =
   | { kind: 'drag'; index: number; start: Vec2; moved: boolean; before: TrackDoc }
@@ -35,6 +37,7 @@ const HINTS: Record<Mode, string> = {
   start: 'TAP THE TRACK TO SET START / FINISH',
   split0: 'TAP THE TRACK WHERE SECTOR 2 BEGINS',
   split1: 'TAP THE TRACK WHERE SECTOR 3 BEGINS',
+  calibrate: 'TAP TWO POINTS A KNOWN DISTANCE APART',
 };
 
 const $ = <T extends HTMLElement>(id: string): T => document.getElementById(id) as T;
@@ -58,6 +61,8 @@ export class App {
   private seed: Vec2 | null = null;
   private confidence: Confidence | null = null;
   private trace: Vec2[] = [];
+  /** calibration points (world) */
+  private measure: Vec2[] = [];
   private hot = -1;
 
   private pointers = new Map<number, Vec2>();
@@ -140,9 +145,10 @@ export class App {
       path: this.path,
       controls: this.doc?.controls ?? [],
       sectors: this.doc?.sectors ?? DEFAULT_SECTORS,
-      showControls: !!this.doc && this.mode !== 'pick' && this.mode !== 'trace',
+      showControls: !!this.doc && this.mode !== 'pick' && this.mode !== 'trace' && this.mode !== 'calibrate',
       hot: this.hot,
       trace: this.mode === 'trace' ? this.trace : [],
+      measure: this.mode === 'calibrate' ? this.measure : [],
     });
   }
 
@@ -172,12 +178,16 @@ export class App {
       this.history.push(structuredClone(this.doc));
       if (this.history.length > HISTORY_MAX) this.history.shift();
     }
-    this.doc = doc;
     this.path = doc ? pathFromControls(doc.controls) : [];
+    this.doc = doc ? syncLength(doc, this.pathUnits()) : null;
     this.hot = -1;
     this.scheduleSave();
     this.updatePanel();
     this.requestDraw();
+  }
+
+  private pathUnits(): number {
+    return this.path.length > 2 ? polylineLength(this.path, true) : 0;
   }
 
   private patch(p: Partial<TrackDoc>, record = true): void {
@@ -187,6 +197,7 @@ export class App {
   private setMode(m: Mode): void {
     this.mode = m;
     if (m !== 'trace') this.trace = [];
+    if (m !== 'calibrate') this.measure = [];
     const hint = $('hint');
     hint.textContent = HINTS[m];
     hint.hidden = !HINTS[m];
@@ -321,7 +332,7 @@ export class App {
         this.confidence = res.confidence;
         const prev = this.doc;
         const doc = newDoc('image', this.imageData!.width, this.imageData!.height, res.controls, prev?.lengthKm ?? 5);
-        if (prev) doc.name = prev.name;
+        if (prev) [doc.name, doc.mpu] = [prev.name, prev.mpu]; // same image: keep its scale
         this.setDoc(doc);
         this.setMode('edit');
         this.fit();
@@ -338,6 +349,7 @@ export class App {
     if (this.trace.length < MIN_CONTROLS) return this.toast(`Place at least ${MIN_CONTROLS} points.`);
     const s = this.space();
     const doc = newDoc('manual', s.w, s.h, this.trace.slice(), this.doc?.lengthKm ?? 5);
+    doc.mpu = this.doc?.mpu;
     this.confidence = null;
     this.setDoc(doc);
     this.setMode('edit');
@@ -509,6 +521,11 @@ export class App {
         this.patch({ controls: setStart(this.doc.controls, world, 10 / this.view.scale), sectors: [...DEFAULT_SECTORS] });
         this.toast('Start/finish moved · sectors reset to equal thirds');
         return this.setMode('edit');
+      case 'calibrate':
+        this.measure = this.measure.length >= 2 ? [world] : [...this.measure, world];
+        this.updatePanel();
+        if (this.measure.length === 2) $<HTMLInputElement>('calib-m').focus();
+        return this.requestDraw();
       case 'split0':
       case 'split1':
         if (!this.doc || !this.nearPath(screen, true)) return this.toast('Tap on the track line.');
@@ -616,6 +633,21 @@ export class App {
     on('btn-s2', toggle('split0'));
     on('btn-s3', toggle('split1'));
     on('btn-sectors-reset', () => this.patch({ sectors: [...DEFAULT_SECTORS] }));
+
+    on('btn-calibrate', toggle('calibrate'));
+    on('calib-cancel', () => this.setMode('edit'));
+    const calibM = $<HTMLInputElement>('calib-m');
+    const applyCalib = () => {
+      const m = Number(calibM.value);
+      if (!this.doc || this.measure.length < 2 || !(m > 0)) return;
+      const [a, b] = this.measure;
+      this.setDoc(calibrate(this.doc, a, b, m, this.pathUnits()));
+      this.toast(`Scale set: 1 px = ${this.doc!.mpu!.toFixed(2)} m · lap ${this.doc!.lengthKm.toFixed(3)} km`);
+      this.setMode('edit');
+    };
+    on('calib-apply', applyCalib);
+    calibM.addEventListener('input', () => this.updatePanel());
+    calibM.addEventListener('keydown', (e) => e.key === 'Enter' && applyCalib());
     on('btn-undo', () => this.undo());
 
     const name = $<HTMLInputElement>('name');
@@ -623,7 +655,7 @@ export class App {
     const len = $<HTMLInputElement>('length');
     len.addEventListener('change', () => {
       const v = Number(len.value);
-      if (v > 0 && v <= 100) this.patch({ lengthKm: v });
+      if (v > 0 && v <= 100 && this.doc) this.setDoc(withLength(this.doc, v, this.pathUnits()));
       else this.updatePanel();
     });
 
@@ -670,9 +702,17 @@ export class App {
       'btn-start': this.mode === 'start',
       'btn-s2': this.mode === 'split0',
       'btn-s3': this.mode === 'split1',
+      'btn-calibrate': this.mode === 'calibrate',
     };
     for (const [id, on] of Object.entries(active)) $(id).classList.toggle('active', on);
     $('trace-tools').hidden = this.mode !== 'trace';
+    $('calib-tools').hidden = this.mode !== 'calibrate';
+    $('btn-calibrate').hidden = d?.crs === 'mercator'; // map coordinates already carry the scale
+    $<HTMLButtonElement>('calib-apply').disabled = this.measure.length < 2 || !(Number($<HTMLInputElement>('calib-m').value) > 0);
+    $('calib-px').textContent =
+      this.measure.length === 2
+        ? `${Math.round(Math.hypot(this.measure[1].x - this.measure[0].x, this.measure[1].y - this.measure[0].y))} px between A and B`
+        : `Tap point ${this.measure.length ? 'B' : 'A'}`;
     $<HTMLButtonElement>('btn-trace-done').disabled = this.trace.length < MIN_CONTROLS;
 
     const sw = $('swatch');
@@ -694,9 +734,13 @@ export class App {
       if (document.activeElement !== name) name.value = d.name;
       const len = $<HTMLInputElement>('length');
       if (document.activeElement !== len) len.value = String(d.lengthKm);
-      const px = polylineLength(this.path, true);
+      const px = this.pathUnits();
+      const unit = d.crs === 'mercator' ? 'map units' : 'px';
+      const scale = d.mpu
+        ? `<span>Scale <b>1 ${d.crs === 'mercator' ? 'unit' : 'px'} = ${d.mpu.toFixed(d.mpu < 10 ? 2 : 1)} m</b></span>`
+        : `<span class="warn">Scale not set: calibrate or type the lap length</span>`;
       $('stats').innerHTML =
-        `<span><b>${d.controls.length}</b> points</span><span><b>${Math.round(px)}</b> px lap</span>` +
+        `<span><b>${d.controls.length}</b> points</span><span><b>${Math.round(px)}</b> ${unit} lap</span>${scale}` +
         `<span>S1 <b>${Math.round(d.sectors[0] * 100)}%</b> · S2 <b>${Math.round((d.sectors[1] - d.sectors[0]) * 100)}%</b> · S3 <b>${Math.round((1 - d.sectors[1]) * 100)}%</b></span>`;
       $('meta').textContent = `${d.name.toUpperCase()} · ${d.lengthKm.toFixed(3)} KM`;
     } else {

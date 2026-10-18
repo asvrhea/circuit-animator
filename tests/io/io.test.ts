@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { geoToTrack, parseGeoFile, parseGpx, parseKml } from '../../src/io/geo';
-import { newDoc, parseDoc, serializeDoc } from '../../src/io/trackFile';
+import { calibrate, newDoc, parseDoc, serializeDoc, syncLength, withLength } from '../../src/io/trackFile';
 
 /** Square of ~1.1 km sides near the equator. */
 const square = [
@@ -59,6 +59,31 @@ describe('track JSON', () => {
     expect(back.controls[1]).toEqual({ x: 3.14, y: 4 });
     expect(back.lengthKm).toBe(4.2);
     expect(back.sectors).toEqual(doc.sectors);
+  });
+
+  it('keeps scale and crs through JSON', () => {
+    const doc = { ...newDoc('map', 10, 10, [{ x: 1, y: 2 }, { x: 3, y: 4 }, { x: 5, y: 6 }]), mpu: 0.99, crs: 'mercator' as const };
+    const back = parseDoc(serializeDoc(doc));
+    expect(back.mpu).toBe(0.99);
+    expect(back.crs).toBe('mercator');
+    expect(back.source).toBe('map');
+  });
+
+  it('calibrates from two points and keeps the length in sync', () => {
+    const doc = newDoc('image', 100, 100, [{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 1, y: 1 }]);
+    // 200 px apart = 1000 m -> 5 m/px; a 600 px lap is 3 km
+    const cal = calibrate(doc, { x: 0, y: 0 }, { x: 200, y: 0 }, 1000, 600);
+    expect(cal.mpu).toBe(5);
+    expect(cal.lengthKm).toBe(3);
+    expect(syncLength(cal, 800).lengthKm).toBe(4);
+    expect(calibrate(doc, { x: 0, y: 0 }, { x: 0, y: 0 }, 1000, 600)).toBe(doc);
+  });
+
+  it('typing a length fixes the scale', () => {
+    const doc = withLength(newDoc('image', 100, 100, [{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 1, y: 1 }]), 4.6, 590);
+    expect(doc.mpu).toBeCloseTo(4600 / 590);
+    expect(syncLength(doc, 590).lengthKm).toBe(4.6);
+    expect(syncLength(doc, 295).lengthKm).toBe(2.3);
   });
 
   it('rejects junk and repairs bad sectors', () => {

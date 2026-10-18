@@ -106,6 +106,14 @@
             <button id="btn-sectors-reset">Equal sectors</button>
             <button id="btn-undo">Undo</button>
           </div>
+          <div class="row"><button id="btn-calibrate">Calibrate scale</button></div>
+          <div class="calib" id="calib-tools" hidden>
+            <p class="help" id="calib-px">Tap point A</p>
+            <label class="field"><span>Real distance A→B (metres)</span>
+              <input id="calib-m" type="number" min="1" step="any" inputmode="decimal" placeholder="e.g. 1250" /></label>
+            <p class="help">Measure it in Google Maps: long-press a point → Measure distance.</p>
+            <div class="row"><button id="calib-cancel">Cancel</button><button id="calib-apply" class="primary" disabled>Apply</button></div>
+          </div>
           <label class="field"><span>Name</span><input id="name" type="text" maxlength="80" /></label>
           <label class="field"><span>Lap length (km)</span><input id="length" type="number" min="0.1" max="100" step="0.001" /></label>
           <div id="stats" class="stats"></div>

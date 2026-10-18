@@ -112,6 +112,7 @@ export class AnimRenderer {
 
     // ---- overlays
     drawHud(ctx, w, h, u, r, s, this.opts.info);
+    if (s.phase !== 'intro') this.drawScaleBar(ctx, w, h, u);
     if (this.opts.camera === 'follow' && s.phase !== 'intro') this.drawMinimap(ctx, w, u, pose.p);
     drawTitles(ctx, w, h, u, r, s, this.opts.info, time - (r.total - r.outro));
     return s;
@@ -246,6 +247,33 @@ export class AnimRenderer {
     ctx.lineJoin = 'round';
     ctx.stroke();
     ctx.restore();
+  }
+
+  /** Bottom-right scale bar with a round length (camera scale is isotropic, so rotation doesn't matter). */
+  private drawScaleBar(ctx: Ctx, w: number, h: number, u: number): void {
+    const pxPerM = this.cam.scale / this.race.mpu;
+    const target = 110 * u;
+    const nice = [10, 20, 50, 100, 200, 250, 500, 1000, 2000, 5000];
+    const m = nice.reduce((best, v) => (Math.abs(v * pxPerM - target) < Math.abs(best * pxPerM - target) ? v : best), nice[0]);
+    const len = m * pxPerM;
+    const x1 = w - 16 * u, x0 = x1 - len, y = h - 22 * u;
+    ctx.strokeStyle = 'rgba(0,0,0,0.7)';
+    ctx.lineWidth = 5 * u;
+    ctx.lineCap = 'butt';
+    ctx.beginPath();
+    ctx.moveTo(x0, y - 5 * u);
+    ctx.lineTo(x0, y);
+    ctx.lineTo(x1, y);
+    ctx.lineTo(x1, y - 5 * u);
+    ctx.stroke();
+    ctx.strokeStyle = THEME.text;
+    ctx.lineWidth = 2 * u;
+    ctx.stroke();
+    ctx.fillStyle = THEME.text;
+    ctx.font = `700 ${12 * u}px ${THEME.font}`;
+    ctx.textAlign = 'right';
+    ctx.textBaseline = 'bottom';
+    ctx.fillText(m >= 1000 ? `${m / 1000} KM` : `${m} M`, x1, y - 6 * u);
   }
 
   private drawMinimap(ctx: Ctx, w: number, u: number, car: Vec2): void {
