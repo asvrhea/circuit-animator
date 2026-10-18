@@ -1,29 +1,29 @@
 # Progress
 
 ## Done
-- Phase 1 Scaffold: Vite 6 + TS 5 strict + Vitest 3, responsive dark layout, canvas placeholder.
-- Phase 2 Extraction (28 tests green, build green):
-  - `vision/color` HSV mask + slider→tolerance + eyedropper (most-saturated px nearby).
-  - `vision/morph` close via chamfer distance transform (disk-like; square kernel failed on diagonals).
-  - `vision/components` largest 8-connected; `vision/skeleton` Zhang–Suen (active-pixel list).
-  - `vision/loop` topology graph (junction clusters merged ≤10px) → 2-core spur prune →
-    straight-through Euler walk (figure-eight) else longest simple cycle; open line → longest path, joined.
-  - `vision/extract` pipeline; retries close radius r, 2r, 3r if loop stays open; confidence score + hints.
-  - `geom/` polyline, RDP (closed), arc-length resample, centripetal Catmull–Rom, `pathFromControls`.
-  - `tests/helpers/synth.ts` synthetic map: loop on noise + gap + crossing road + stray blob.
-
-- Tuned on user's real screenshot (1600x888 phone capture, black hand-drawn line, digits 1–14
-  written on it, black letterbox): ~200ms, closed loop, high confidence for tol 0.1–0.5.
-  Fixes: chroma (s·v) matching for dark colours; eyedropper picks colourful-or-dark px;
-  `seed` keeps the clicked component (not the letterbox); cycle score penalises sharp junction
-  turns (digit loops); thick long spurs = collapsed hairpin → out-and-back excursion.
-  Local harness: `tests/_local/real.test.ts` (gitignored, env REAL_RGBA/SEED_X/SEED_Y/TOL/CROP).
+- Phase 1 Scaffold: Vite 6 + TS 5 strict + Vitest 3, responsive dark broadcast layout.
+- Phase 2 Extraction: `vision/` (chroma-HSV mask, chamfer close, seeded component, Zhang–Suen,
+  graph loop ordering w/ spur prune, turn-penalised longest cycle, figure-eight Euler walk,
+  collapsed-hairpin recovery, close-radius retry, confidence) + `geom/` RDP/resample/Catmull–Rom.
+  Tuned on user's real phone screenshot (black hand-drawn line + digits): ~200ms, high confidence.
+- Phase 3 Inputs + editor (52 tests, build green, verified in browser pane):
+  - `geom/projection` Web Mercator + haversine; `io/geo` regex KML/GPX parse → fitted controls (RDP 2px,
+    ≤120 pts) + real km; `io/trackFile` TrackDoc v1 JSON (validate/repair); `geom/edit` pure ops.
+  - `render/view` (fit/zoom/pan), `render/editor` (dimmed image, sector colours, chequered start,
+    direction chevron, S2/S3 ticks, controls, trace), `render/theme`.
+  - `ui/app` modes edit/pick/trace/start/split0/split1; drag, tap-line insert, right-click/long-press
+    delete, wheel/pinch zoom, drag-pan, undo (Ctrl+Z, 60 deep), Esc; drop/open PNG/JPG/KML/GPX/JSON;
+    image downscaled ≤1600; autosave doc + JPEG image to localStorage (try/catch); restore on load.
+  - TrackDoc model: controls[0] = start/finish, order = direction, sectors as lap fractions.
 
 ## Next
-- Phase 3 (default tolerance slider 0.2, pass eyedropper click as `seed`): upload/drag-drop, downscale to ≤1600px, eyedropper UI, tolerance slider, overlay on dimmed
-  screenshot + confidence, KML/GPX + Mercator, manual trace, editor, start line, sectors, JSON save/load.
+- Phase 4 Animation: `sim/` curvature, speed profile (v=min(vMax, sqrt(aLat/κ)) + fwd/back passes),
+  lap timing; `render/` car + trail, draw-in intro, HUD (timer, sectors, km/h from lengthKm),
+  cameras (full / follow), themes (broadcast / over screenshot), play/pause/scrub/speed/laps.
 
 ## Open issues / env notes
-- Large close radius could merge parallel straights; only used on retry when the loop is open.
-- Euler walk is preferred whenever the core has all-even degrees (could include small extra loops).
-- Node/Git installed via winget; refresh PATH in new shells (`Machine;User`). esbuild install script approved.
+- Start/finish after detection is arbitrary (where the loop trace began); user sets it + Reverse.
+- Large close radius could merge parallel straights (only used on retry when loop stays open).
+- `img.decode()` stalls in background tabs: use onload. Local harness `tests/_local/` (gitignored).
+- Dev server for browser pane: `.claude/launch.json` ("dev", node + vite.js, port 5173).
+- Node/Git installed via winget; refresh PATH in new shells. esbuild install script approved.
