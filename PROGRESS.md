@@ -12,9 +12,15 @@
   - `geom/` polyline, RDP (closed), arc-length resample, centripetal Catmull–Rom, `pathFromControls`.
   - `tests/helpers/synth.ts` synthetic map: loop on noise + gap + crossing road + stray blob.
 
+- Tuned on user's real screenshot (1600x888 phone capture, black hand-drawn line, digits 1–14
+  written on it, black letterbox): ~200ms, closed loop, high confidence for tol 0.1–0.5.
+  Fixes: chroma (s·v) matching for dark colours; eyedropper picks colourful-or-dark px;
+  `seed` keeps the clicked component (not the letterbox); cycle score penalises sharp junction
+  turns (digit loops); thick long spurs = collapsed hairpin → out-and-back excursion.
+  Local harness: `tests/_local/real.test.ts` (gitignored, env REAL_RGBA/SEED_X/SEED_Y/TOL/CROP).
+
 ## Next
-- Tune on a real screenshot from the user (pending).
-- Phase 3: upload/drag-drop, downscale to ≤1600px, eyedropper UI, tolerance slider, overlay on dimmed
+- Phase 3 (default tolerance slider 0.2, pass eyedropper click as `seed`): upload/drag-drop, downscale to ≤1600px, eyedropper UI, tolerance slider, overlay on dimmed
   screenshot + confidence, KML/GPX + Mercator, manual trace, editor, start line, sectors, JSON save/load.
 
 ## Open issues / env notes

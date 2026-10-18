@@ -3,9 +3,9 @@ import { rdpClosed } from '../geom/simplify';
 import { DEFAULT_SAMPLES, pathFromControls } from '../geom/track';
 import type { Vec2 } from '../geom/vec2';
 import { colorMask, type HsvTolerance } from './color';
-import { largestComponent, type ComponentResult } from './components';
+import { componentAt, largestComponent, type ComponentResult } from './components';
 import { orderLoop, type LoopResult } from './loop';
-import { close } from './morph';
+import { chamferDistance, close } from './morph';
 import { skeletonize } from './skeleton';
 import { countOn, type Mask, type RGB, type RGBAImage } from './types';
 
@@ -17,6 +17,8 @@ export interface ExtractOptions {
   /** RDP tolerance in px for control points */
   simplifyEpsilon?: number;
   samples?: number;
+  /** eyedropper click (image px); the component under it is kept instead of the largest */
+  seed?: Vec2;
 }
 
 export type ConfidenceLabel = 'high' | 'medium' | 'low';
@@ -60,10 +62,11 @@ export function extractTrack(img: RGBAImage, opts: ExtractOptions): ExtractResul
   // close. Kept small by default so nearby parallel straights don't merge.
   let best: { comp: ComponentResult; skeleton: Mask; loop: LoopResult } | null = null;
   for (const r of [closeRadius, closeRadius * 2, closeRadius * 3]) {
-    const comp = largestComponent(close(raw, r));
+    const closedMask = close(raw, r);
+    const comp = opts.seed ? componentAt(closedMask, opts.seed) : largestComponent(closedMask);
     if (comp.size < MIN_COMPONENT_PX) continue;
     const skeleton = skeletonize(comp.mask);
-    const loop = orderLoop(skeleton);
+    const loop = orderLoop(skeleton, { halfWidth: chamferDistance(comp.mask, 0) });
     if (!loop || loop.points.length < 8) continue;
     const gapRatio = (l: LoopResult) => (l.closed ? 0 : l.gap / l.length);
     if (!best || gapRatio(loop) < gapRatio(best.loop)) best = { comp, skeleton, loop };
@@ -76,14 +79,27 @@ export function extractTrack(img: RGBAImage, opts: ExtractOptions): ExtractResul
   const controls = rdpClosed(smoothed, eps);
   const path = pathFromControls(controls, samples);
 
-  // Share of the raw colour that ended up inside the kept component.
-  let rawInComp = 0;
-  for (let p = 0; p < raw.data.length; p++) rawInComp += raw.data[p] & comp.mask.data[p];
+  // Of the matching colour around the track (its bbox + margin), how much is the track itself.
+  const { width: w } = raw;
+  let x0 = Infinity, y0 = Infinity, x1 = -1, y1 = -1;
+  for (let p = 0; p < comp.mask.data.length; p++) {
+    if (!comp.mask.data[p]) continue;
+    const x = p % w, y = (p / w) | 0;
+    x0 = Math.min(x0, x); x1 = Math.max(x1, x); y0 = Math.min(y0, y); y1 = Math.max(y1, y);
+  }
+  const M = 10;
+  let rawNear = 0, rawInComp = 0;
+  for (let y = Math.max(0, y0 - M); y <= Math.min(raw.height - 1, y1 + M); y++)
+    for (let x = Math.max(0, x0 - M); x <= Math.min(w - 1, x1 + M); x++) {
+      const p = y * w + x;
+      rawNear += raw.data[p];
+      rawInComp += raw.data[p] & comp.mask.data[p];
+    }
 
   return {
     controls,
     path,
-    confidence: scoreConfidence(rawInComp / rawCount, loop.loopPixels / Math.max(1, loop.skeletonPixels), loop.closed ? 0 : loop.gap / loop.length),
+    confidence: scoreConfidence(rawInComp / Math.max(1, rawNear),loop.loopPixels / Math.max(1, loop.skeletonPixels), loop.closed ? 0 : loop.gap / loop.length),
     mask: comp.mask,
     skeleton,
   };

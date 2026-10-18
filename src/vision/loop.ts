@@ -59,6 +59,10 @@ const MIN_SELF_LOOP_PIXELS = 6;
 const DIR_LOOKAHEAD = 8;
 /** Junction nodes closer than this (along the skeleton) are merged into one. */
 const JUNCTION_MERGE_PX = 10;
+/** Use the full Euler walk only if the best simple cycle covers less than this share of the core. */
+const EULER_PREFERRED_BELOW = 0.8;
+/** Penalty (px) for a 90° turn at a junction when scoring cycles; 180° costs double. */
+const TURN_PENALTY_PX = 30;
 /** DFS budget for longest-cycle search. */
 const CYCLE_BUDGET = 200_000;
 
@@ -339,10 +343,17 @@ function straightEulerCircuit(g: Graph, edgeIds: number[]): Step[] | null {
   return cur === start ? steps : null;
 }
 
-/** Longest simple cycle (by length) within `edgeIds`, via bounded DFS. */
+/** Cost in px of turning `turn` = 1 - cos(angle) at a junction. */
+const turnCost = (g: Graph, from: Step, to: Step): number => TURN_PENALTY_PX * (1 - dot(inDir(g, from), outDir(g, to)));
+
+/**
+ * Best simple cycle within `edgeIds`, via bounded DFS. Score is length minus
+ * a penalty per sharp junction turn, so the route goes straight through
+ * crossings instead of detouring around a digit or label that touches it.
+ */
 function longestCycle(g: Graph, edgeIds: number[]): Step[] | null {
   const inSet = new Set(edgeIds);
-  let best: Step[] | null = null, bestLen = -1;
+  let best: Step[] | null = null, bestLen = -Infinity;
 
   for (const i of edgeIds) {
     const e = g.edges[i];
@@ -362,15 +373,16 @@ function longestCycle(g: Graph, edgeIds: number[]): Step[] | null {
       if (e.a === e.b) continue;
       const m = other(e, n);
       const step: Step = { e: i, fwd: e.a === n };
+      const turn = path.length ? turnCost(g, path[path.length - 1], step) : 0;
       if (m === start) {
-        if (path.length >= 1 && path[path.length - 1].e !== i && len + e.len > bestLen) {
-          best = [...path, step];
-          bestLen = len + e.len;
+        if (path.length >= 1 && path[path.length - 1].e !== i) {
+          const score = len + e.len - turn - turnCost(g, step, path[0]);
+          if (score > bestLen) [best, bestLen] = [[...path, step], score];
         }
       } else if (m > start && !onPath[m]) {
         onPath[m] = 1;
         path.push(step);
-        dfs(start, m, len + e.len);
+        dfs(start, m, len + e.len - turn);
         path.pop();
         onPath[m] = 0;
       }
@@ -420,6 +432,82 @@ function longestPath(g: Graph, edgeIds: number[]): Step[] {
   return out.reverse();
 }
 
+// ---------------------------------------------------------------- hairpins
+
+const median = (v: number[]): number => {
+  if (!v.length) return 0;
+  const s = [...v].sort((a, b) => a - b);
+  return s[s.length >> 1];
+};
+
+/** Longest walk from node n into the non-core tree starting with edge `first`. */
+function deepestBranch(g: Graph, n: number, first: number, core: boolean[]): { steps: Step[]; len: number } {
+  const e = g.edges[first];
+  const step: Step = { e: first, fwd: e.a === n };
+  const m = stepTo(e, step.fwd);
+  let best: { steps: Step[]; len: number } = { steps: [], len: 0 };
+  for (const i of g.inc[m]) {
+    if (i === first || core[i] || g.edges[i].a === g.edges[i].b) continue;
+    const sub = deepestBranch(g, m, i, core);
+    if (sub.len > best.len) best = sub;
+  }
+  return { steps: [step, ...best.steps], len: e.len + best.len };
+}
+
+/**
+ * Build the loop polyline, inserting an out-and-back excursion wherever a
+ * long spur is markedly thicker than the loop line (a collapsed hairpin).
+ * The two legs are pushed apart by about one line width.
+ */
+function withHairpins(
+  g: Graph, steps: Step[], core: boolean[], halfWidth: Float32Array, w: number,
+): { points: Vec2[]; extraPixels: number } {
+  const hw = (p: Vec2): number => halfWidth[Math.round(p.y) * w + Math.round(p.x)];
+  const lineHalf = median(steps.flatMap((s) => g.edges[s.e].pts.map(hw))) || 1;
+  const minLen = Math.max(20, 8 * lineHalf);
+
+  const out: Vec2[] = [];
+  const done = new Set<number>();
+  let extraPixels = 0;
+
+  for (const s of steps) {
+    const e = g.edges[s.e];
+    const n = stepFrom(e, s.fwd);
+    out.push({ ...g.nodes[n] });
+    if (!done.has(n)) {
+      done.add(n);
+      for (const i of g.inc[n]) {
+        if (core[i] || g.edges[i].a === g.edges[i].b) continue;
+        const br = deepestBranch(g, n, i, core);
+        const pts = br.steps.flatMap((st) => [...stepPoints(g.edges[st.e], st.fwd), g.nodes[stepTo(g.edges[st.e], st.fwd)]]);
+        if (br.len < minLen || median(pts.map(hw)) < 1.5 * lineHalf) continue;
+        out.push(...hairpinLegs(g.nodes[n], pts, lineHalf));
+        out.push({ ...g.nodes[n] });
+        extraPixels += pts.length;
+      }
+    }
+    out.push(...stepPoints(e, s.fwd));
+  }
+  return { points: out, extraPixels };
+}
+
+/** Out leg offset to one side, back leg to the other, tapering in from the junction. */
+function hairpinLegs(origin: Vec2, pts: Vec2[], offset: number): Vec2[] {
+  const all = [origin, ...pts];
+  const normals = all.map((_, i) => {
+    const a = all[Math.max(0, i - 2)], b = all[Math.min(all.length - 1, i + 2)];
+    const t = normalize(sub(b, a));
+    return { x: -t.y, y: t.x };
+  });
+  const taper = (i: number): number => Math.min(1, i / 6);
+  const leg = (sign: number) =>
+    all.slice(1).map((p, k) => {
+      const i = k + 1, o = sign * offset * taper(i);
+      return { x: p.x + normals[i].x * o, y: p.y + normals[i].y * o };
+    });
+  return [...leg(1), ...leg(-1).reverse()];
+}
+
 // ---------------------------------------------------------------- entry point
 
 function polyLength(pts: Vec2[]): number {
@@ -428,7 +516,16 @@ function polyLength(pts: Vec2[]): number {
   return L;
 }
 
-export function orderLoop(skel: Mask): LoopResult | null {
+export interface LoopOptions {
+  /**
+   * Distance from each mask pixel to the background (≈ local half line width).
+   * Enables hairpin recovery: a spur that is much thicker than the loop is two
+   * nearly-touching legs merged into one stroke, so it is walked out and back.
+   */
+  halfWidth?: Float32Array;
+}
+
+export function orderLoop(skel: Mask, opts: LoopOptions = {}): LoopResult | null {
   const g = buildGraph(skel);
   if (!g.edges.length) return null;
 
@@ -438,11 +535,16 @@ export function orderLoop(skel: Mask): LoopResult | null {
   let closed = true;
 
   if (coreEdges.length) {
+    steps = longestCycle(g, coreEdges);
+    // A figure-eight's best simple cycle is only one lobe (~half the core),
+    // so walk the whole core instead. Small extra loops (e.g. a handwritten
+    // digit touching the line) leave the simple cycle near-complete: keep it.
+    const coreLen = coreEdges.reduce((s, i) => s + g.edges[i].len, 0);
+    const cycleLen = steps ? steps.reduce((s, st) => s + g.edges[st.e].len, 0) : 0;
     const allEven = coreEdges
       .flatMap((i) => [g.edges[i].a, g.edges[i].b])
       .every((n) => edgeDegree(g, n, core) % 2 === 0);
-    if (allEven) steps = straightEulerCircuit(g, coreEdges);
-    steps ??= longestCycle(g, coreEdges);
+    if (allEven && cycleLen < EULER_PREFERRED_BELOW * coreLen) steps = straightEulerCircuit(g, coreEdges) ?? steps;
   }
   if (!steps) {
     closed = false;
@@ -451,10 +553,17 @@ export function orderLoop(skel: Mask): LoopResult | null {
     if (!steps.length) return null;
   }
 
-  const points = stepsToPolyline(g, steps);
-  if (!closed) points.push({ ...g.nodes[stepTo(g.edges[steps[steps.length - 1].e], steps[steps.length - 1].fwd)] });
+  let points: Vec2[];
   let loopPixels = 0;
   for (const s of steps) loopPixels += g.edges[s.e].pts.length;
+  if (closed && opts.halfWidth) {
+    const r = withHairpins(g, steps, core, opts.halfWidth, skel.width);
+    points = r.points;
+    loopPixels += r.extraPixels;
+  } else {
+    points = stepsToPolyline(g, steps);
+    if (!closed) points.push({ ...g.nodes[stepTo(g.edges[steps[steps.length - 1].e], steps[steps.length - 1].fwd)] });
+  }
 
   return {
     points,

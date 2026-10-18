@@ -12,14 +12,14 @@ export interface HSV {
 export interface HsvTolerance {
   /** max hue difference in degrees */
   h: number;
-  /** max saturation difference (0..1) */
+  /** max chroma (s·v) difference (0..1) */
   s: number;
   /** max value difference (0..1) */
   v: number;
 }
 
-/** Below this saturation hue is meaningless, so it is ignored when matching. */
-const GREY_SAT = 0.15;
+/** Below this chroma hue is meaningless, so it is ignored when matching. */
+const GREY_CHROMA = 0.12;
 
 export function rgbToHsv(r: number, g: number, b: number): HSV {
   const rn = r / 255, gn = g / 255, bn = b / 255;
@@ -48,9 +48,16 @@ export function toleranceFromSlider(t: number): HsvTolerance {
   return { h: 6 + 34 * k, s: 0.12 + 0.5 * k, v: 0.12 + 0.5 * k };
 }
 
+/**
+ * Compare in the HSV cone: chroma (s·v) instead of raw saturation, because
+ * saturation is unstable for dark pixels (near-black reads as s≈1). Hue is
+ * only checked when both colours have enough chroma for it to mean anything.
+ */
 export function matchesHsv(px: HSV, target: HSV, tol: HsvTolerance): boolean {
-  if (Math.abs(px.s - target.s) > tol.s || Math.abs(px.v - target.v) > tol.v) return false;
-  if (target.s < GREY_SAT) return true;
+  if (Math.abs(px.v - target.v) > tol.v) return false;
+  const cp = px.s * px.v, ct = target.s * target.v;
+  if (Math.abs(cp - ct) > tol.s) return false;
+  if (ct < GREY_CHROMA || cp < GREY_CHROMA / 2) return true;
   return hueDiff(px.h, target.h) <= tol.h;
 }
 
@@ -67,8 +74,8 @@ export function colorMask(img: RGBAImage, target: RGB, tol: HsvTolerance): Mask 
 }
 
 /**
- * Eyedropper: return the most saturated pixel within `radius` of (x, y).
- * A drawn route is usually the most saturated thing under the cursor, so this
+ * Eyedropper: return the most distinctive (colourful or dark) pixel within
+ * `radius` of (x, y). A drawn route usually stands out that way, so this
  * forgives clicks that land on the anti-aliased edge of a thin line.
  */
 export function sampleColor(img: RGBAImage, x: number, y: number, radius = 3): RGB {
@@ -81,7 +88,8 @@ export function sampleColor(img: RGBAImage, x: number, y: number, radius = 3): R
       if (xx < 0 || xx >= img.width) continue;
       const i = (yy * img.width + xx) * 4;
       const hsv = rgbToHsv(img.data[i], img.data[i + 1], img.data[i + 2]);
-      const score = hsv.s * (0.5 + 0.5 * hsv.v);
+      // Map backgrounds are pale and grey; routes are colourful or dark.
+      const score = Math.max(hsv.s * hsv.v, 1 - hsv.v);
       if (score > bestScore) {
         bestScore = score;
         best = { r: img.data[i], g: img.data[i + 1], b: img.data[i + 2] };
