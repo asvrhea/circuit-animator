@@ -1,6 +1,7 @@
 import {
-  distanceToPath, fractionAt, insertControl, moveControl, nearestIndex, removeControl, reverseControls, reverseSectors,
-  setSector, setStart, MIN_CONTROLS,
+  apexIndex, controlAt, cornerScale, distanceToPath, findCorner, fractionAt, insertControl, moveControl, nearestIndex,
+  removeControl, reverseControls, reverseSectors, scaleCorner, setSector, setStart, straightenBetween, tightnessToScale,
+  MIN_CONTROLS, type Corner,
 } from '../geom/edit';
 import { polylineLength } from '../geom/polyline';
 import { groundMetresPerUnit, toUnits, WORLD } from '../geom/tiles';
@@ -11,6 +12,7 @@ import {
   calibrate, DEFAULT_SECTORS, newDoc, parseDoc, serializeDoc, syncLength, withLength, type TrackDoc,
 } from '../io/trackFile';
 import { drawEditor } from '../render/editor';
+import { curvatureClosed } from '../sim/curvature';
 import { TileLayer } from '../render/tiles';
 import { boundsOf, View } from '../render/view';
 import { sampleColor, toleranceFromSlider } from '../vision/color';
@@ -19,7 +21,7 @@ import type { RGB } from '../vision/types';
 import { Animator } from './animator';
 import { download, fileKind, loadImage, store } from './files';
 
-type Mode = 'edit' | 'pick' | 'trace' | 'start' | 'split0' | 'split1' | 'calibrate';
+type Mode = 'edit' | 'pick' | 'trace' | 'start' | 'split0' | 'split1' | 'calibrate' | 'straight' | 'corner';
 
 type Gesture =
   | { kind: 'drag'; index: number; start: Vec2; moved: boolean; before: TrackDoc }
@@ -42,6 +44,8 @@ const HINTS: Record<Mode, string> = {
   split0: 'TAP THE TRACK WHERE SECTOR 2 BEGINS',
   split1: 'TAP THE TRACK WHERE SECTOR 3 BEGINS',
   calibrate: 'TAP TWO POINTS A KNOWN DISTANCE APART',
+  straight: 'TAP ONE END OF THE STRAIGHT',
+  corner: 'TAP A CORNER · THEN USE THE SLIDER',
 };
 
 const $ = <T extends HTMLElement>(id: string): T => document.getElementById(id) as T;
@@ -67,6 +71,10 @@ export class App {
   private trace: Vec2[] = [];
   /** calibration points (world) */
   private measure: Vec2[] = [];
+  /** first end of a straighten (world, on the path) */
+  private straightA: Vec2 | null = null;
+  /** corner being adjusted: slider positions apply to `base`; `before` is set while a change is uncommitted */
+  private corner: { corner: Corner; base: Vec2[]; before: TrackDoc | null } | null = null;
   private hot = -1;
 
   private pointers = new Map<number, Vec2>();
@@ -165,7 +173,8 @@ export class App {
       showControls: !!this.doc && this.mode !== 'pick' && this.mode !== 'trace' && this.mode !== 'calibrate',
       hot: this.hot,
       trace: this.mode === 'trace' ? this.trace : [],
-      measure: this.mode === 'calibrate' ? this.measure : [],
+      measure: this.mode === 'calibrate' ? this.measure : this.mode === 'straight' && this.straightA ? [this.straightA] : [],
+      selected: this.mode === 'corner' && this.corner ? this.corner.corner.indices : [],
     });
   }
 
@@ -217,6 +226,9 @@ export class App {
     this.mode = m;
     if (m !== 'trace') this.trace = [];
     if (m !== 'calibrate') this.measure = [];
+    this.commitCorner();
+    this.straightA = null;
+    this.selectCorner(null);
     const hint = $('hint');
     hint.textContent = HINTS[m];
     hint.hidden = !HINTS[m];
@@ -661,11 +673,77 @@ export class App {
         if (!this.doc || !this.nearPath(screen, true)) return this.toast('Tap on the track line.');
         this.patch({ sectors: setSector(this.doc.sectors, this.mode === 'split0' ? 0 : 1, fractionAt(this.path, world)) });
         return this.setMode('edit');
+      case 'straight':
+        return this.straightTap(screen, world, touch);
+      case 'corner':
+        return this.cornerTap(screen, world);
       case 'edit':
         if (this.doc && this.hitControl(screen, touch) < 0 && this.nearPath(screen, touch)) {
           this.patch({ controls: insertControl(this.doc.controls, world).controls });
         }
     }
+  }
+
+  private straightTap(screen: Vec2, world: Vec2, touch: boolean): void {
+    if (!this.doc || !this.nearPath(screen, true)) return this.toast('Tap on the track line.');
+    const ctrl = this.doc.controls;
+    const ci = nearestIndex(ctrl, world, (touch ? 20 : 11) / this.view.scale);
+    const p = ci >= 0 ? ctrl[ci] : this.path[distanceToPath(this.path, world).index];
+    if (!this.straightA) {
+      this.straightA = { ...p };
+      $('hint').textContent = 'TAP THE OTHER END OF THE STRAIGHT';
+      return this.requestDraw();
+    }
+    const a = controlAt(ctrl, this.straightA, 1e-6);
+    const b = controlAt(a.controls, p, 1e-6);
+    const ia = b.controls !== a.controls && b.index <= a.index ? a.index + 1 : a.index;
+    if (ia === b.index) return this.toast('Pick a different point for the other end.');
+    this.patch({ controls: straightenBetween(b.controls, ia, b.index) });
+    this.toast('Straightened · Undo to revert');
+    this.setMode('edit');
+  }
+
+  private cornerTap(screen: Vec2, world: Vec2): void {
+    if (!this.doc || !this.nearPath(screen, true)) return this.toast('Tap on the track line.');
+    this.commitCorner();
+    const ctrl = this.doc.controls;
+    const near = distanceToPath(this.path, world).index;
+    const apex = apexIndex(curvatureClosed(this.path), near, Math.round(this.path.length / 30));
+    const corner = findCorner(ctrl, nearestIndex(ctrl, this.path[apex]));
+    if (!corner) return this.toast('No corner there: tap where the track turns.');
+    this.selectCorner({ corner, base: ctrl.map((q) => ({ ...q })), before: null });
+  }
+
+  private selectCorner(c: App['corner']): void {
+    this.corner = c;
+    const t = $<HTMLInputElement>('corner-t');
+    t.value = '0';
+    t.disabled = !c;
+    $('corner-out').textContent = c ? '100% radius' : '';
+    $('corner-help').textContent = c ? 'Slide right to tighten, left to open · tap another corner' : 'Tap a corner on the track';
+    this.requestDraw();
+  }
+
+  /** Preview a slider position on the selected corner (not yet in undo history). */
+  private previewCorner(t: number): void {
+    const c = this.corner;
+    if (!c || !this.doc) return;
+    c.before ??= structuredClone(this.doc);
+    const s = tightnessToScale(t);
+    this.doc = { ...this.doc, controls: scaleCorner(c.base, c.corner, s) };
+    this.path = pathFromControls(this.doc.controls);
+    $('corner-out').textContent = `${Math.round(cornerScale(c.corner, s) * 100)}% radius`;
+    this.requestDraw();
+  }
+
+  /** Record the previewed corner change as one undoable edit. */
+  private commitCorner(): void {
+    const c = this.corner;
+    if (!c?.before || !this.doc) return;
+    const moved = this.doc;
+    this.doc = c.before;
+    c.before = null;
+    this.setDoc(moved);
   }
 
   private deleteControl(i: number): void {
@@ -700,8 +778,10 @@ export class App {
   }
 
   private undo(): void {
+    this.commitCorner();
     const prev = this.history.pop();
     if (prev) this.setDoc(prev, false);
+    if (this.corner) this.selectCorner(null); // its base is stale now
   }
 
   // ------------------------------------------------------------ panel
@@ -769,6 +849,12 @@ export class App {
     on('btn-start', toggle('start'));
     on('btn-s2', toggle('split0'));
     on('btn-s3', toggle('split1'));
+    on('btn-straight', toggle('straight'));
+    on('btn-corner', toggle('corner'));
+    on('corner-done', () => this.setMode('edit'));
+    const cornerT = $<HTMLInputElement>('corner-t');
+    cornerT.addEventListener('input', () => this.previewCorner(Number(cornerT.value)));
+    cornerT.addEventListener('change', () => this.commitCorner());
     on('btn-sectors-reset', () => this.patch({ sectors: [...DEFAULT_SECTORS] }));
 
     on('btn-calibrate', toggle('calibrate'));
@@ -845,9 +931,12 @@ export class App {
       'btn-s2': this.mode === 'split0',
       'btn-s3': this.mode === 'split1',
       'btn-calibrate': this.mode === 'calibrate',
+      'btn-straight': this.mode === 'straight',
+      'btn-corner': this.mode === 'corner',
     };
     for (const [id, on] of Object.entries(active)) $(id).classList.toggle('active', on);
     $('calib-tools').hidden = this.mode !== 'calibrate';
+    $('corner-tools').hidden = this.mode !== 'corner';
     $('btn-calibrate').hidden = d?.crs === 'mercator'; // map coordinates already carry the scale
     $<HTMLButtonElement>('calib-apply').disabled = this.measure.length < 2 || !(Number($<HTMLInputElement>('calib-m').value) > 0);
     $('calib-px').textContent =

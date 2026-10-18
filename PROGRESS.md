@@ -1,6 +1,6 @@
 # Progress
 
-All five phases done. 81 tests, `npm run build` green (76 kB JS, 28 kB gzip), verified in the browser pane.
+All five phases done. 94 tests, `npm run build` green (81 kB JS, 30 kB gzip), verified in the browser pane.
 
 ## Done
 - 1 Scaffold: Vite 6 + TS strict + Vitest 3; dark broadcast UI, stacks on phones.
@@ -16,12 +16,14 @@ All five phases done. 81 tests, `npm run build` green (76 kB JS, 28 kB gzip), ve
   720p/1080p canvas, captureStream(0)+requestFrame, MediaRecorder, wall-clock race time × speed, pauses
   recording while tab hidden or map tiles loading, refuses empty output); PNG frame; JSON. Verified: 720p30
   MP4 plays (1280x720, 10.9 s), 1080p PNG. README rewritten as app docs.
+- Editor tools: Straighten (two taps → exact straight via collinear helper points, start kept); Corner
+  (tap → slider scales the corner about its vertex, tighter = slower in Animate). Both undoable.
 
 ## User's track (in browser-pane storage)
 - Drawn on the OSM map near JIExpo Kemayoran: 31 points, 4.593 km (Formula preset flying lap ≈ 1:16).
 
 ## Ideas / open issues
-- Editor tools: straighten segment, corner-tightness slider (offered to user, not built).
+- Corner opening is capped where entry/exit would pass the next control (single-point corners barely open).
 - Start/finish after screenshot detection is arbitrary; user sets it.
 - WebM from MediaRecorder lacks duration metadata in some players (MP4 preferred where available).
 - Hidden tabs throttle rAF/ResizeObserver; recording pauses while hidden (by design).

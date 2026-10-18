@@ -16,8 +16,10 @@ export interface EditorScene {
   /** index of hovered / dragged control, or -1 */
   hot: number;
   trace: Vec2[];
-  /** calibration points A, B */
+  /** calibration points A, B (also the first end of a straighten) */
   measure: Vec2[];
+  /** control indices to ring, e.g. the corner being adjusted */
+  selected: number[];
 }
 
 type Ctx = CanvasRenderingContext2D;
@@ -44,6 +46,7 @@ export function drawEditor(ctx: Ctx, w: number, h: number, view: View, s: Editor
 
   if (s.path.length > 2) drawTrack(ctx, view, s.path, s.sectors);
   if (s.trace.length) drawTrace(ctx, view, s.trace);
+  if (s.showControls && s.selected.length) drawSelected(ctx, view, s.selected.map((i) => s.controls[i]).filter(Boolean));
   if (s.showControls) drawControls(ctx, view, s.controls, s.hot);
   if (s.measure.length) drawMeasure(ctx, view, s.measure);
 }
@@ -184,6 +187,17 @@ function drawStartLine(ctx: Ctx, pts: Vec2[]): void {
   ctx.closePath();
   ctx.stroke();
   ctx.fill();
+}
+
+function drawSelected(ctx: Ctx, view: View, pts: Vec2[]): void {
+  ctx.strokeStyle = THEME.accent;
+  ctx.lineWidth = 2.5;
+  for (const c of pts) {
+    const p = view.toScreen(c);
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, 10, 0, Math.PI * 2);
+    ctx.stroke();
+  }
 }
 
 function drawControls(ctx: Ctx, view: View, controls: Vec2[], hot: number): void {

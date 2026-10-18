@@ -189,6 +189,7 @@ button:focus-visible, input:focus-visible { outline: 2px solid #fff; outline-off
 .row:first-of-type { margin-top: 0; }
 .row button { flex: 1; }
 .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.grid2 + .grid2, .calib + .grid2 { margin-top: 8px; }
 
 .drop {
   display: flex;
