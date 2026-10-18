@@ -12,6 +12,7 @@ import { boundsOf, View } from '../render/view';
 import { sampleColor, toleranceFromSlider } from '../vision/color';
 import { extractTrack, type Confidence } from '../vision/extract';
 import type { RGB } from '../vision/types';
+import { Animator } from './animator';
 import { download, fileKind, loadImage, store } from './files';
 
 type Mode = 'edit' | 'pick' | 'trace' | 'start' | 'split0' | 'split1';
@@ -67,7 +68,13 @@ export class App {
   /** keep refitting on resize until the user pans or zooms */
   private autoFit: 'track' | 'image' | null = 'image';
 
+  private viewMode: 'edit' | 'animate' = 'edit';
+  private readonly animator: Animator;
+
   constructor() {
+    this.animator = new Animator(this.canvas, this.ctx, () => (this.doc ? { doc: this.doc, image: this.image } : null));
+    $('tab-edit').addEventListener('click', () => this.setView('edit'));
+    $('tab-anim').addEventListener('click', () => this.setView('animate'));
     new ResizeObserver(() => this.resize()).observe(this.canvas);
     this.bindPointer();
     this.bindPanel();
@@ -86,7 +93,30 @@ export class App {
     this.canvas.width = Math.round(this.cssW * dpr);
     this.canvas.height = Math.round(this.cssH * dpr);
     if (this.autoFit) this.fit(this.autoFit);
-    this.requestDraw();
+    if (this.viewMode === 'animate') this.animator.redraw(true);
+    else this.requestDraw();
+  }
+
+  private setView(v: 'edit' | 'animate'): void {
+    if (v === 'animate' && !this.doc) return;
+    this.viewMode = v;
+    const anim = v === 'animate';
+    $('tab-edit').classList.toggle('active', !anim);
+    $('tab-anim').classList.toggle('active', anim);
+    for (const id of ['sec-source', 'sec-detect', 'sec-track']) $(id).classList.toggle('off', anim);
+    $('sec-anim').hidden = !anim;
+    $('transport').hidden = !anim;
+    document.querySelector<HTMLElement>('.zoom')!.hidden = anim;
+    if (anim) {
+      this.setMode('edit');
+      $('hint').hidden = true;
+      this.canvas.style.cursor = 'pointer';
+      this.animator.enter();
+    } else {
+      this.animator.exit();
+      this.canvas.style.cursor = 'default';
+      this.requestDraw();
+    }
   }
 
   private requestDraw(): void {
@@ -99,6 +129,7 @@ export class App {
   }
 
   private draw(): void {
+    if (this.viewMode === 'animate') return;
     const dpr = window.devicePixelRatio || 1;
     this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     const space = this.space();
@@ -336,6 +367,7 @@ export class App {
 
     c.addEventListener('pointerdown', (e) => {
       if (e.button !== 0 && e.pointerType === 'mouse') return;
+      if (this.viewMode === 'animate') return this.animator.toggle();
       c.setPointerCapture(e.pointerId);
       const p = this.local(e);
       this.pointers.set(e.pointerId, p);
@@ -413,6 +445,7 @@ export class App {
 
     c.addEventListener('contextmenu', (e) => {
       e.preventDefault();
+      if (this.viewMode === 'animate') return;
       const i = this.hitControl(this.local(e), false);
       if (i >= 0) this.deleteControl(i);
     });
@@ -421,6 +454,7 @@ export class App {
       'wheel',
       (e) => {
         e.preventDefault();
+        if (this.viewMode === 'animate') return;
         this.autoFit = null;
         this.view.zoomAt(this.local(e), Math.exp(-e.deltaY * 0.0015));
         this.requestDraw();
@@ -447,7 +481,7 @@ export class App {
   }
 
   private hover(p: Vec2, touch: boolean): void {
-    if (touch) return;
+    if (touch || this.viewMode === 'animate') return;
     const i = this.hitControl(p, false);
     if (i !== this.hot) {
       this.hot = i;
@@ -506,7 +540,11 @@ export class App {
 
   private onKey(e: KeyboardEvent): void {
     const t = e.target as HTMLElement;
-    if (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA') return;
+    if (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT') return;
+    if (this.viewMode === 'animate') {
+      if (this.animator.onKey(e)) e.preventDefault();
+      return;
+    }
     if (e.key === 'Escape') this.setMode('edit');
     else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') {
       e.preventDefault();
@@ -621,6 +659,8 @@ export class App {
     $('empty').hidden = !!(this.image || d);
     $('sec-detect').hidden = !this.image;
     $('sec-track').hidden = !d;
+    $<HTMLButtonElement>('tab-anim').disabled = !d;
+    if (!d && this.viewMode === 'animate') this.setView('edit');
     $<HTMLButtonElement>('btn-save').disabled = !d;
     $<HTMLButtonElement>('btn-undo').disabled = !this.history.length;
 

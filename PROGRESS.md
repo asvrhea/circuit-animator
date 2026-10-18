@@ -16,14 +16,25 @@
     image downscaled ≤1600; autosave doc + JPEG image to localStorage (try/catch); restore on load.
   - TrackDoc model: controls[0] = start/finish, order = direction, sectors as lap fractions.
 
+- Phase 4 Animation (67 tests, verified in browser on the real track):
+  - `sim/curvature` Menger κ (k=2) + smoothing; `sim/speed` corner limit, forward/backward passes from
+    slowest corner (exact for closed loop), friction circle + drag fade; presets Formula/GT/Road car;
+    standing-start lap 1. `sim/lap` time integration (const accel per segment), sampleAtTime/timeAtDist,
+    sector times. `sim/race` timeline intro 3s → laps → outro 4s cool-down; raceState(t) pure.
+  - `render/camera` rotate+zoom with exp smoothing; `render/anim` grid/screenshot bg, draw-in reveal,
+    sector-lit track, chequered line, time-based fading trail, car chevron, minimap (follow);
+    `render/hud` timing tower (lap, timer, S1–S3, last/best), speed + throttle/brake, intro/finish cards.
+  - `ui/animator` Edit/Animate tabs, transport bar under canvas, camera/theme/car/laps/playback speed,
+    settings persisted; Space/←/→, tap to play.
+
 ## Next
-- Phase 4 Animation: `sim/` curvature, speed profile (v=min(vMax, sqrt(aLat/κ)) + fwd/back passes),
-  lap timing; `render/` car + trail, draw-in intro, HUD (timer, sectors, km/h from lengthKm),
-  cameras (full / follow), themes (broadcast / over screenshot), play/pause/scrub/speed/laps.
+- Phase 5 Export: MediaRecorder MP4/WebM at 720p/1080p, 30/60 fps from an offscreen canvas driven by
+  fixed timestep (renderer is resolution independent: render(ctx,w,h,dpr,t)); PNG frame; JSON; polish.
 
 ## Open issues / env notes
 - Start/finish after detection is arbitrary (where the loop trace began); user sets it + Reverse.
 - Large close radius could merge parallel straights (only used on retry when loop stays open).
-- `img.decode()` stalls in background tabs: use onload. Local harness `tests/_local/` (gitignored).
+- `img.decode()` stalls in background tabs: use onload. Hidden tabs throttle rAF to ~2/s: export must
+  not depend on rAF cadence (fixed-step timer or warn user to keep tab visible). Local harness `tests/_local/` (gitignored).
 - Dev server for browser pane: `.claude/launch.json` ("dev", node + vite.js, port 5173).
 - Node/Git installed via winget; refresh PATH in new shells. esbuild install script approved.

@@ -25,6 +25,11 @@
           <button id="z-out" title="Zoom out" aria-label="Zoom out">−</button>
           <button id="z-fit" title="Fit track" aria-label="Fit">FIT</button>
         </div>
+        <div class="transport" id="transport" hidden>
+          <button id="tp-play" aria-label="Play">▶</button>
+          <input type="range" id="tp-scrub" min="0" max="1000" step="1" value="0" aria-label="Scrub" />
+          <span id="tp-time">0:00 / 0:00</span>
+        </div>
         <div class="dropmask" id="dropmask" hidden><span>DROP TO LOAD</span></div>
         <div class="empty" id="empty">
           <p class="empty-title">DROP A CIRCUIT SCREENSHOT</p>
@@ -33,6 +38,33 @@
       </main>
 
       <aside class="panel" id="panel">
+        <nav class="tabs" role="tablist">
+          <button id="tab-edit" role="tab" class="active">Edit</button>
+          <button id="tab-anim" role="tab" disabled>Animate</button>
+        </nav>
+
+        <section id="sec-anim" hidden>
+          <h2>Animate</h2>
+          <div class="field"><span>Camera</span>
+            <div class="seg"><button data-cam="full">Full track</button><button data-cam="follow">Follow</button></div>
+          </div>
+          <div class="field"><span>Theme</span>
+            <div class="seg"><button data-theme="broadcast">Broadcast</button><button data-theme="screenshot">Screenshot</button></div>
+          </div>
+          <label class="field"><span>Car</span><select id="car"></select></label>
+          <div class="grid2">
+            <label class="field"><span>Laps</span><input id="laps" type="number" min="1" max="10" step="1" value="3" /></label>
+            <label class="field"><span>Playback</span>
+              <select id="pb-speed">
+                <option value="0.25">0.25×</option><option value="0.5">0.5×</option><option value="1">1×</option>
+                <option value="2">2×</option><option value="4">4×</option><option value="8">8×</option>
+              </select>
+            </label>
+          </div>
+          <div id="lap-stats" class="stats"></div>
+          <p class="help">Space play/pause · ←/→ skip 5 s · tap the view to play/pause</p>
+        </section>
+
         <section id="sec-source">
           <h2>Source</h2>
           <label class="drop" id="drop">
