@@ -3,6 +3,7 @@ import { poseAt, raceState, type Race, type RaceState } from '../sim/race';
 import { Camera, type CamPose } from './camera';
 import { drawHud, drawTitles, type HudInfo } from './hud';
 import { THEME } from './theme';
+import { OSM_ATTRIBUTION, type TileLayer } from './tiles';
 import { boundsOf, type Rect } from './view';
 
 export type CameraMode = 'full' | 'follow';
@@ -10,8 +11,10 @@ export type ThemeMode = 'broadcast' | 'screenshot';
 
 export interface AnimOptions {
   camera: CameraMode;
+  /** 'screenshot' = the source map: the screenshot image, or OSM tiles for map-coordinate tracks */
   theme: ThemeMode;
   image: CanvasImageSource | null;
+  tiles: TileLayer | null;
   imageW: number;
   imageH: number;
   info: HudInfo;
@@ -77,9 +80,15 @@ export class AnimRenderer {
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.fillStyle = THEME.bg;
     ctx.fillRect(0, 0, w, h);
-    const useImage = this.opts.theme === 'screenshot' && this.opts.image;
+    const useTiles = this.opts.theme === 'screenshot' && !!this.opts.tiles;
+    const useImage = this.opts.theme === 'screenshot' && (!!this.opts.image || useTiles);
     this.cam.apply(ctx, dpr);
-    if (useImage) {
+    if (useTiles) {
+      // muted map so the track and HUD read first
+      ctx.filter = 'grayscale(0.7) brightness(0.8) contrast(1.05)';
+      this.opts.tiles!.draw(ctx, this.cam.visibleRect(w, h), this.cam.scale, dpr);
+      ctx.filter = 'none';
+    } else if (useImage) {
       ctx.imageSmoothingQuality = 'high';
       ctx.drawImage(this.opts.image!, 0, 0, this.opts.imageW, this.opts.imageH);
     } else {
@@ -115,6 +124,13 @@ export class AnimRenderer {
     if (s.phase !== 'intro') this.drawScaleBar(ctx, w, h, u);
     if (this.opts.camera === 'follow' && s.phase !== 'intro') this.drawMinimap(ctx, w, u, pose.p);
     drawTitles(ctx, w, h, u, r, s, this.opts.info, time - (r.total - r.outro));
+    if (useTiles) {
+      ctx.font = `600 ${10 * u}px ${THEME.font}`;
+      ctx.textAlign = 'right';
+      ctx.textBaseline = 'bottom';
+      ctx.fillStyle = 'rgba(232,236,241,0.75)';
+      ctx.fillText(OSM_ATTRIBUTION, w - 6 * u, h - 3 * u);
+    }
     return s;
   }
 
@@ -256,7 +272,7 @@ export class AnimRenderer {
     const nice = [10, 20, 50, 100, 200, 250, 500, 1000, 2000, 5000];
     const m = nice.reduce((best, v) => (Math.abs(v * pxPerM - target) < Math.abs(best * pxPerM - target) ? v : best), nice[0]);
     const len = m * pxPerM;
-    const x1 = w - 16 * u, x0 = x1 - len, y = h - 22 * u;
+    const x1 = w - 16 * u, x0 = x1 - len, y = h - 26 * u;
     ctx.strokeStyle = 'rgba(0,0,0,0.7)';
     ctx.lineWidth = 5 * u;
     ctx.lineCap = 'butt';

@@ -3,6 +3,7 @@ import {
   setSector, setStart, MIN_CONTROLS,
 } from '../geom/edit';
 import { polylineLength } from '../geom/polyline';
+import { groundMetresPerUnit, toUnits, WORLD } from '../geom/tiles';
 import { pathFromControls } from '../geom/track';
 import { dist, type Vec2 } from '../geom/vec2';
 import { geoToTrack, parseGeoFile } from '../io/geo';
@@ -10,6 +11,7 @@ import {
   calibrate, DEFAULT_SECTORS, newDoc, parseDoc, serializeDoc, syncLength, withLength, type TrackDoc,
 } from '../io/trackFile';
 import { drawEditor } from '../render/editor';
+import { TileLayer } from '../render/tiles';
 import { boundsOf, View } from '../render/view';
 import { sampleColor, toleranceFromSlider } from '../vision/color';
 import { extractTrack, type Confidence } from '../vision/extract';
@@ -26,6 +28,8 @@ type Gesture =
 
 const KEY_DOC = 'circuit-animator:doc';
 const KEY_IMAGE = 'circuit-animator:image';
+const KEY_MAPVIEW = 'circuit-animator:mapview';
+const KEY_MAPON = 'circuit-animator:map';
 const HISTORY_MAX = 60;
 const LONG_PRESS_MS = 550;
 const TAP_SLOP = 6;
@@ -75,9 +79,18 @@ export class App {
 
   private viewMode: 'edit' | 'animate' = 'edit';
   private readonly animator: Animator;
+  /** OSM basemap visible (drawing on the map, or a track in map coordinates) */
+  private mapOn = false;
+  private mapViewTimer: number | undefined;
+  private readonly tiles = new TileLayer(() => {
+    if (this.viewMode === 'animate') this.animator.redrawIfPaused();
+    else this.requestDraw();
+  });
 
   constructor() {
-    this.animator = new Animator(this.canvas, this.ctx, () => (this.doc ? { doc: this.doc, image: this.image } : null));
+    this.animator = new Animator(this.canvas, this.ctx, () =>
+      this.doc ? { doc: this.doc, image: this.image, tiles: this.doc.crs === 'mercator' ? this.tiles : null } : null,
+    );
     $('tab-edit').addEventListener('click', () => this.setView('edit'));
     $('tab-anim').addEventListener('click', () => this.setView('animate'));
     new ResizeObserver(() => this.resize()).observe(this.canvas);
@@ -108,7 +121,8 @@ export class App {
     const anim = v === 'animate';
     $('tab-edit').classList.toggle('active', !anim);
     $('tab-anim').classList.toggle('active', anim);
-    for (const id of ['sec-source', 'sec-detect', 'sec-track']) $(id).classList.toggle('off', anim);
+    for (const id of ['sec-source', 'sec-detect', 'sec-track', 'sec-map', 'sec-trace']) $(id).classList.toggle('off', anim);
+    $('attrib').hidden = anim || !this.mapOn;
     $('sec-anim').hidden = !anim;
     $('transport').hidden = !anim;
     document.querySelector<HTMLElement>('.zoom')!.hidden = anim;
@@ -140,6 +154,7 @@ export class App {
     const space = this.space();
     drawEditor(this.ctx, this.cssW, this.cssH, this.view, {
       image: this.image,
+      basemap: this.mapOn ? (ctx) => this.drawTiles(ctx) : null,
       width: space.w,
       height: space.h,
       path: this.path,
@@ -164,6 +179,8 @@ export class App {
     if (this.cssW < 2) return;
     if (target === 'track' && this.path.length > 2) {
       this.view.fit(boundsOf(this.path), this.cssW, this.cssH, 0.12);
+    } else if (this.mapOn) {
+      this.fitMapView();
     } else {
       const s = this.space();
       this.view.fit({ x: 0, y: 0, w: s.w, h: s.h }, this.cssW, this.cssH, 0.03);
@@ -224,11 +241,19 @@ export class App {
 
   private async restore(): Promise<void> {
     const raw = store.get(KEY_DOC);
-    if (!raw) return this.updatePanel();
+    if (!raw) {
+      // was drawing on the map without a finished track yet
+      if (store.get(KEY_MAPON)) {
+        this.setMap(true);
+        this.fit('image');
+      }
+      return this.updatePanel();
+    }
     try {
       const doc = parseDoc(raw);
       const img = store.get(KEY_IMAGE);
-      if (doc.source !== 'geo' && img) {
+      this.setMap(doc.crs === 'mercator');
+      if (doc.crs !== 'mercator' && doc.source !== 'geo' && img) {
         const loaded = await loadImage(img);
         this.image = loaded.canvas;
         this.imageData = loaded.data;
@@ -263,6 +288,7 @@ export class App {
 
   private async loadImageFile(f: File): Promise<void> {
     const { canvas, data } = await loadImage(f);
+    this.setMap(false);
     this.image = canvas;
     this.imageData = data;
     this.target = null;
@@ -284,8 +310,11 @@ export class App {
     this.confidence = null;
     this.history = [];
     store.remove(KEY_IMAGE);
-    const doc = newDoc('geo', t.size, t.size, t.controls, Math.round(t.lengthKm * 1000) / 1000);
+    const doc = newDoc('geo', t.width, t.height, t.controls, Math.round(t.lengthKm * 1000) / 1000);
     doc.name = name.replace(/\.(kml|gpx)$/i, '');
+    doc.crs = 'mercator';
+    doc.mpu = t.mpu;
+    this.setMap(true);
     this.setDoc(doc, false);
     this.setMode('edit');
     this.fit();
@@ -294,7 +323,8 @@ export class App {
 
   private loadJson(text: string): void {
     const doc = parseDoc(text);
-    if (this.image && (doc.width !== this.image.width || doc.height !== this.image.height)) {
+    this.setMap(doc.crs === 'mercator');
+    if (this.image && (doc.crs === 'mercator' || doc.width !== this.image.width || doc.height !== this.image.height)) {
       this.image = null;
       this.imageData = null;
       store.remove(KEY_IMAGE);
@@ -347,12 +377,110 @@ export class App {
 
   private finishTrace(): void {
     if (this.trace.length < MIN_CONTROLS) return this.toast(`Place at least ${MIN_CONTROLS} points.`);
-    const s = this.space();
-    const doc = newDoc('manual', s.w, s.h, this.trace.slice(), this.doc?.lengthKm ?? 5);
-    doc.mpu = this.doc?.mpu;
+    let doc: TrackDoc;
+    if (this.mapOn) {
+      const b = boundsOf(this.trace);
+      doc = newDoc('map', b.w, b.h, this.trace.slice());
+      doc.crs = 'mercator';
+      doc.mpu = groundMetresPerUnit({ x: b.x + b.w / 2, y: b.y + b.h / 2 });
+    } else {
+      const s = this.space();
+      doc = newDoc('manual', s.w, s.h, this.trace.slice(), this.doc?.lengthKm ?? 5);
+      doc.mpu = this.doc?.mpu;
+    }
     this.confidence = null;
     this.setDoc(doc);
     this.setMode('edit');
+  }
+
+  // ------------------------------------------------------------ map
+
+  private setMap(on: boolean): void {
+    this.mapOn = on;
+    if (on) store.set(KEY_MAPON, '1');
+    else store.remove(KEY_MAPON);
+    // map units are metres: allow world view down to street level
+    this.view.minScale = on ? 2e-6 : 0.05;
+    this.view.maxScale = on ? 12 : 40;
+    $('attrib').hidden = !on || this.viewMode === 'animate';
+  }
+
+  private drawTiles(ctx: CanvasRenderingContext2D): void {
+    const dpr = window.devicePixelRatio || 1;
+    const v = this.view;
+    ctx.setTransform(dpr * v.scale, 0, 0, dpr * v.scale, dpr * v.ox, dpr * v.oy);
+    const a = v.toWorld({ x: 0, y: 0 }), b = v.toWorld({ x: this.cssW, y: this.cssH });
+    this.tiles.draw(ctx, { x: a.x, y: a.y, w: b.x - a.x, h: b.y - a.y }, v.scale, dpr);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    this.saveMapView();
+  }
+
+  private saveMapView(): void {
+    clearTimeout(this.mapViewTimer);
+    this.mapViewTimer = window.setTimeout(() => {
+      const c = this.view.toWorld({ x: this.cssW / 2, y: this.cssH / 2 });
+      store.set(KEY_MAPVIEW, JSON.stringify({ x: c.x, y: c.y, scale: this.view.scale }));
+    }, 500);
+  }
+
+  /** Show the last map position, or the whole world. */
+  private fitMapView(): void {
+    try {
+      const v = JSON.parse(store.get(KEY_MAPVIEW) ?? 'null') as { x: number; y: number; scale: number } | null;
+      if (v && Number.isFinite(v.x) && Number.isFinite(v.y) && v.scale > 0) {
+        this.view.scale = v.scale;
+        this.view.ox = this.cssW / 2 - v.x * v.scale;
+        this.view.oy = this.cssH / 2 - v.y * v.scale;
+        return;
+      }
+    } catch {
+      /* fall through */
+    }
+    this.view.fit({ x: -WORLD / 2, y: -WORLD / 2, w: WORLD, h: WORLD }, this.cssW, this.cssH, 0);
+  }
+
+  private enterMap(): void {
+    if (this.doc && this.doc.crs !== 'mercator' && !confirm('Start a new track on the map? The current track will be replaced (Save JSON first to keep it).')) return;
+    this.image = null;
+    this.imageData = null;
+    this.confidence = null;
+    this.target = null;
+    this.history = [];
+    store.remove(KEY_IMAGE);
+    this.setMap(true);
+    if (this.doc?.crs !== 'mercator') this.setDoc(null, false);
+    this.setMode('edit');
+    this.autoFit = null;
+    if (this.doc) this.fit();
+    else this.fitMapView();
+    this.requestDraw();
+    $<HTMLInputElement>('map-q').focus();
+  }
+
+  /** Place search via OSM Nominatim (user-initiated, one request per search). */
+  private async searchPlace(q: string): Promise<void> {
+    if (!q.trim()) return;
+    try {
+      const res = await fetch(`https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&q=${encodeURIComponent(q)}`, {
+        headers: { Accept: 'application/json' },
+      });
+      const hits = (await res.json()) as { lat: string; lon: string; display_name: string; boundingbox?: string[] }[];
+      if (!hits.length) return this.toast('No place found. Try a different name.');
+      const h = hits[0];
+      const bb = h.boundingbox?.map(Number);
+      const [s, n, w, e] = bb && bb.every(Number.isFinite) ? bb : [+h.lat - 0.01, +h.lat + 0.01, +h.lon - 0.01, +h.lon + 0.01];
+      const a = toUnits({ lon: w, lat: n }), b = toUnits({ lon: e, lat: s });
+      // never zoom closer than ~street level for a point result
+      const minSpan = 600;
+      const cx = (a.x + b.x) / 2, cy = (a.y + b.y) / 2;
+      const sw = Math.max(b.x - a.x, minSpan), sh = Math.max(b.y - a.y, minSpan);
+      this.autoFit = null;
+      this.view.fit({ x: cx - sw / 2, y: cy - sh / 2, w: sw, h: sh }, this.cssW, this.cssH, 0.05);
+      this.requestDraw();
+      this.toast(h.display_name.split(',').slice(0, 3).join(','));
+    } catch {
+      this.toast('Search failed. Check your connection.');
+    }
   }
 
   // ------------------------------------------------------------ pointer
@@ -610,9 +738,16 @@ export class App {
     const toggle = (m: Mode) => () => this.setMode(this.mode === m ? 'edit' : m);
 
     on('btn-pick', toggle('pick'));
-    on('btn-trace', () => {
+    const startTrace = () => {
       this.trace = [];
       toggle('trace')();
+    };
+    on('btn-trace', startTrace);
+    on('btn-map-draw', startTrace);
+    on('btn-map', () => this.enterMap());
+    $('map-search').addEventListener('submit', (e) => {
+      e.preventDefault();
+      void this.searchPlace($<HTMLInputElement>('map-q').value);
     });
     on('btn-trace-undo', () => {
       this.trace.pop();
@@ -670,6 +805,7 @@ export class App {
       this.confidence = null;
       this.history = [];
       store.remove(KEY_IMAGE);
+      this.setMap(false);
       this.setDoc(null, false);
       this.setMode('edit');
       this.fit('image');
@@ -688,7 +824,11 @@ export class App {
 
   private updatePanel(): void {
     const d = this.doc;
-    $('empty').hidden = !!(this.image || d);
+    $('empty').hidden = !!(this.image || d || this.mapOn);
+    $('sec-map').hidden = !this.mapOn;
+    $('sec-trace').hidden = this.mode !== 'trace';
+    $('btn-map-draw').textContent = d ? 'Draw new track' : 'Draw track';
+    $('btn-map-draw').classList.toggle('active', this.mode === 'trace');
     $('sec-detect').hidden = !this.image;
     $('sec-track').hidden = !d;
     $<HTMLButtonElement>('tab-anim').disabled = !d;
@@ -705,7 +845,6 @@ export class App {
       'btn-calibrate': this.mode === 'calibrate',
     };
     for (const [id, on] of Object.entries(active)) $(id).classList.toggle('active', on);
-    $('trace-tools').hidden = this.mode !== 'trace';
     $('calib-tools').hidden = this.mode !== 'calibrate';
     $('btn-calibrate').hidden = d?.crs === 'mercator'; // map coordinates already carry the scale
     $<HTMLButtonElement>('calib-apply').disabled = this.measure.length < 2 || !(Number($<HTMLInputElement>('calib-m').value) > 0);

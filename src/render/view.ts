@@ -12,6 +12,9 @@ export class View {
   scale = 1;
   ox = 0;
   oy = 0;
+  /** zoom limits in screen px per world unit (map units need a much wider range) */
+  minScale = 0.05;
+  maxScale = 40;
 
   toScreen(p: Vec2): Vec2 {
     return { x: p.x * this.scale + this.ox, y: p.y * this.scale + this.oy };
@@ -30,7 +33,7 @@ export class View {
   }
 
   zoomAt(screen: Vec2, factor: number): void {
-    const s = Math.min(40, Math.max(0.05, this.scale * factor));
+    const s = Math.min(this.maxScale, Math.max(this.minScale, this.scale * factor));
     const k = s / this.scale;
     this.ox = screen.x - (screen.x - this.ox) * k;
     this.oy = screen.y - (screen.y - this.oy) * k;

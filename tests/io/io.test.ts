@@ -1,4 +1,6 @@
 import { describe, expect, it } from 'vitest';
+import { polylineLength } from '../../src/geom/polyline';
+import { toUnits } from '../../src/geom/tiles';
 import { geoToTrack, parseGeoFile, parseGpx, parseKml } from '../../src/io/geo';
 import { calibrate, newDoc, parseDoc, serializeDoc, syncLength, withLength } from '../../src/io/trackFile';
 
@@ -30,15 +32,15 @@ describe('KML / GPX', () => {
     expect(parseGeoFile('x.kml', kml).length).toBe(5);
   });
 
-  it('builds a track with real length and fitted controls', () => {
+  it('builds a track on real map coordinates with the right scale', () => {
     const t = geoToTrack(parseKml(kml));
     expect(t.controls.length).toBe(4); // closing duplicate dropped
     expect(t.lengthKm).toBeGreaterThan(4.3);
     expect(t.lengthKm).toBeLessThan(4.5);
-    for (const p of t.controls) {
-      expect(p.x).toBeGreaterThanOrEqual(0);
-      expect(p.x).toBeLessThanOrEqual(1000);
-    }
+    expect(t.mpu).toBeCloseTo(Math.cos((6.105 * Math.PI) / 180), 4);
+    // the projected loop times mpu matches the great-circle length
+    expect((polylineLength(t.controls, true) * t.mpu) / 1000).toBeCloseTo(t.lengthKm, 2);
+    expect(t.controls[0]).toEqual(toUnits({ lon: 106.8, lat: -6.1 }));
     // north is up: lat -6.10 is above lat -6.11
     expect(t.controls[0].y).toBeLessThan(t.controls[2].y);
   });
@@ -48,7 +50,7 @@ describe('KML / GPX', () => {
       const a = (i / 2000) * Math.PI * 2;
       return { lon: 106.8 + 0.01 * Math.cos(a), lat: -6.1 + 0.01 * Math.sin(a) };
     });
-    expect(geoToTrack(dense, 1000, 120).controls.length).toBeLessThanOrEqual(120);
+    expect(geoToTrack(dense, 120).controls.length).toBeLessThanOrEqual(120);
   });
 });
 

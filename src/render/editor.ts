@@ -4,6 +4,8 @@ import type { View } from './view';
 
 export interface EditorScene {
   image: CanvasImageSource | null;
+  /** draws a map background (already handles its own transform) */
+  basemap: ((ctx: Ctx) => void) | null;
   /** world-space size of the image or blank canvas */
   width: number;
   height: number;
@@ -25,7 +27,11 @@ export function drawEditor(ctx: Ctx, w: number, h: number, view: View, s: Editor
   ctx.fillRect(0, 0, w, h);
 
   ctx.save();
-  if (s.image) {
+  if (s.basemap) {
+    s.basemap(ctx);
+    ctx.fillStyle = 'rgba(11,13,16,0.38)';
+    ctx.fillRect(0, 0, w, h);
+  } else if (s.image) {
     const tl = view.toScreen({ x: 0, y: 0 });
     ctx.globalAlpha = 0.42;
     ctx.imageSmoothingQuality = 'high';

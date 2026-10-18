@@ -28,6 +28,20 @@ export class Camera implements CamPose {
     return { x: this.ax + c * dx - s * dy, y: this.ay + s * dx + c * dy };
   }
 
+  toWorld(p: Vec2): Vec2 {
+    const dx = p.x - this.ax, dy = p.y - this.ay;
+    const c = Math.cos(-this.rot) / this.scale, s = Math.sin(-this.rot) / this.scale;
+    return { x: this.cx + c * dx - s * dy, y: this.cy + s * dx + c * dy };
+  }
+
+  /** World bounding box of the w x h screen (handles rotation). */
+  visibleRect(w: number, h: number): { x: number; y: number; w: number; h: number } {
+    const pts = [this.toWorld({ x: 0, y: 0 }), this.toWorld({ x: w, y: 0 }), this.toWorld({ x: 0, y: h }), this.toWorld({ x: w, y: h })];
+    const xs = pts.map((p) => p.x), ys = pts.map((p) => p.y);
+    const x = Math.min(...xs), y = Math.min(...ys);
+    return { x, y, w: Math.max(...xs) - x, h: Math.max(...ys) - y };
+  }
+
   /** Set ctx so world coordinates draw through this camera (on top of a DPR scale). */
   apply(ctx: CanvasRenderingContext2D, dpr: number): void {
     const c = Math.cos(this.rot) * this.scale, s = Math.sin(this.rot) * this.scale;

@@ -27,11 +27,22 @@
   - `ui/animator` Edit/Animate tabs, transport bar under canvas, camera/theme/car/laps/playback speed,
     settings persisted; Space/←/→, tap to play.
 
+- Scale + map (76 tests, verified in browser at JIExpo Kemayoran):
+  - TrackDoc `mpu` (m per unit) + `crs:'mercator'`. Calibrate (tap A,B + real metres), or typing lap length
+    fixes mpu; shape edits keep lengthKm in sync (`syncLength`). Animation scale bar.
+  - `geom/tiles` map units = Web Mercator m (y down), slippy z/x/y math; `render/tiles` OSM TileLayer
+    (crossOrigin, parent-tile fallback, LRU 400, `ready()` for export). Editor "Draw on map": Nominatim
+    search, tap-to-trace, view persisted; KML/GPX now land on real coords with basemap. Animate theme
+    "Map" = screenshot or muted OSM tiles; attribution drawn on canvas + HTML link.
+
 ## Next
 - Phase 5 Export: MediaRecorder MP4/WebM at 720p/1080p, 30/60 fps from an offscreen canvas driven by
   fixed timestep (renderer is resolution independent: render(ctx,w,h,dpr,t)); PNG frame; JSON; polish.
 
 ## Open issues / env notes
+- Export with map theme: wait for `tiles.ready()` per frame (follow-cam pulls new tiles); keep OSM
+  attribution in the video. OSM tile/Nominatim usage policy: light, user-initiated use only.
+- Hidden/background tabs defer ResizeObserver + rAF: canvas may be 1x1 until first render.
 - Start/finish after detection is arbitrary (where the loop trace began); user sets it + Reverse.
 - Large close radius could merge parallel straights (only used on retry when loop stays open).
 - `img.decode()` stalls in background tabs: use onload. Hidden tabs throttle rAF to ~2/s: export must

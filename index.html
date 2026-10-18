@@ -20,6 +20,7 @@
         <canvas id="view"></canvas>
         <div class="hint" id="hint" hidden></div>
         <div class="toast" id="toast" hidden></div>
+        <a class="attrib" id="attrib" hidden href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">© OpenStreetMap contributors</a>
         <div class="zoom">
           <button id="z-in" title="Zoom in" aria-label="Zoom in">+</button>
           <button id="z-out" title="Zoom out" aria-label="Zoom out">−</button>
@@ -49,7 +50,7 @@
             <div class="seg"><button data-cam="full">Full track</button><button data-cam="follow">Follow</button></div>
           </div>
           <div class="field"><span>Theme</span>
-            <div class="seg"><button data-theme="broadcast">Broadcast</button><button data-theme="screenshot">Screenshot</button></div>
+            <div class="seg"><button data-theme="broadcast">Broadcast</button><button data-theme="screenshot">Map</button></div>
           </div>
           <label class="field"><span>Car</span><select id="car"></select></label>
           <div class="grid2">
@@ -72,6 +73,27 @@
             <strong>Choose file</strong>
             <span>Screenshot · KML / GPX · track JSON</span>
           </label>
+          <div class="row"><button id="btn-map">Draw on map</button></div>
+        </section>
+
+        <section id="sec-map" hidden>
+          <h2>Map</h2>
+          <form id="map-search" class="row">
+            <input id="map-q" type="search" placeholder="Find a place, e.g. JIExpo Kemayoran" aria-label="Find a place" />
+            <button type="submit">Go</button>
+          </form>
+          <div class="row"><button id="btn-map-draw" class="primary">Draw track</button></div>
+          <p class="help">Tap along the roads to place points. Drag to pan, scroll or pinch to zoom. The scale comes from the map, so lap length is exact.</p>
+        </section>
+
+        <section id="sec-trace" hidden>
+          <h2>Trace</h2>
+          <p class="help">Tap along the track · tap the first point to close</p>
+          <div class="row">
+            <button id="btn-trace-undo">Undo point</button>
+            <button id="btn-trace-done" class="primary">Finish</button>
+            <button id="btn-trace-cancel">Cancel</button>
+          </div>
         </section>
 
         <section id="sec-detect" hidden>
@@ -87,11 +109,6 @@
           <div id="confidence" class="confidence" hidden></div>
           <div class="row">
             <button id="btn-trace">Manual trace</button>
-          </div>
-          <div class="row" id="trace-tools" hidden>
-            <button id="btn-trace-undo">Undo point</button>
-            <button id="btn-trace-done" class="primary">Finish</button>
-            <button id="btn-trace-cancel">Cancel</button>
           </div>
         </section>
 

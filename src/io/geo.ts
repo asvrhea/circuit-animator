@@ -45,18 +45,22 @@ export function parseGeoFile(name: string, text: string): LonLat[] {
 }
 
 export interface GeoTrack {
-  /** control points in a box of `size` x `size` px (plus margin) */
+  /** control points in map units (Web Mercator metres, y down) */
   controls: Vec2[];
-  size: number;
   /** real lap length from the coordinates */
   lengthKm: number;
+  /** ground metres per map unit at the track */
+  mpu: number;
+  /** bounding box size in map units */
+  width: number;
+  height: number;
 }
 
 /**
- * Project lon/lat to a square pixel space, drop a duplicated closing point,
- * and thin to at most `maxControls` editable points.
+ * Project lon/lat into map units, drop a duplicated closing point, and thin
+ * to at most `maxControls` editable points.
  */
-export function geoToTrack(pts: LonLat[], size = 1000, maxControls = 120): GeoTrack {
+export function geoToTrack(pts: LonLat[], maxControls = 120): GeoTrack {
   let ll = pts.slice();
   if (ll.length > 2 && haversine(ll[0], ll[ll.length - 1]) < 1) ll = ll.slice(0, -1);
   if (ll.length < 3) throw new Error('The file needs at least 3 points on one line.');
@@ -64,17 +68,15 @@ export function geoToTrack(pts: LonLat[], size = 1000, maxControls = 120): GeoTr
   let lengthM = 0;
   for (let i = 0; i < ll.length; i++) lengthM += haversine(ll[i], ll[(i + 1) % ll.length]);
 
-  const m = projectScreen(ll);
-  const xs = m.map((p) => p.x), ys = m.map((p) => p.y);
-  const minX = Math.min(...xs), minY = Math.min(...ys);
-  const span = Math.max(Math.max(...xs) - minX, Math.max(...ys) - minY) || 1;
-  const margin = size * 0.08;
-  const k = (size - 2 * margin) / span;
-  const px = m.map((p) => ({ x: margin + (p.x - minX) * k, y: margin + (p.y - minY) * k }));
+  const units = projectScreen(ll);
+  const xs = units.map((p) => p.x), ys = units.map((p) => p.y);
+  const w = Math.max(...xs) - Math.min(...xs), h = Math.max(...ys) - Math.min(...ys);
+  const lat = ll.reduce((s, p) => s + p.lat, 0) / ll.length;
+  const mpu = Math.cos((lat * Math.PI) / 180);
 
-  // 2px in a 1000px box: the spline through the kept points stays visually exact,
-  // and dense GPS sampling becomes a comfortable number of editable points.
-  let controls = rdpClosed(px, 2);
-  for (let eps = 3; controls.length > maxControls; eps *= 1.6) controls = rdpClosed(px, eps);
-  return { controls, size, lengthKm: lengthM / 1000 };
+  // ~2 m: the spline through the kept points stays visually exact, and dense
+  // GPS sampling becomes a comfortable number of editable points.
+  let controls = rdpClosed(units, 2 / mpu);
+  for (let eps = 3 / mpu; controls.length > maxControls; eps *= 1.6) controls = rdpClosed(units, eps);
+  return { controls, lengthKm: lengthM / 1000, mpu, width: w || 1, height: h || 1 };
 }

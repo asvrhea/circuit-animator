@@ -2,12 +2,15 @@ import { pathFromControls } from '../geom/track';
 import type { TrackDoc } from '../io/trackFile';
 import { AnimRenderer, type CameraMode, type ThemeMode } from '../render/anim';
 import { buildRace, formatLapTime, type Race } from '../sim/race';
+import type { TileLayer } from '../render/tiles';
 import { CAR_PRESETS, type CarPreset } from '../sim/speed';
 import { store } from './files';
 
 export interface AnimSource {
   doc: TrackDoc;
   image: HTMLCanvasElement | null;
+  /** basemap for tracks in map coordinates */
+  tiles: TileLayer | null;
 }
 
 export interface AnimSettings {
@@ -74,7 +77,7 @@ export class Animator {
   build(): void {
     const src = this.source();
     if (!src) return;
-    const { doc, image } = src;
+    const { doc, image, tiles } = src;
     const race = buildRace({
       path: pathFromControls(doc.controls, SIM_SAMPLES),
       lengthKm: doc.lengthKm,
@@ -82,11 +85,12 @@ export class Animator {
       laps: this.settings.laps,
       sectors: doc.sectors,
     });
-    const theme: ThemeMode = image ? this.settings.theme : 'broadcast';
+    const theme: ThemeMode = image || tiles ? this.settings.theme : 'broadcast';
     this.renderer = new AnimRenderer(race, {
       camera: this.settings.camera,
       theme,
       image,
+      tiles,
       imageW: image?.width ?? doc.width,
       imageH: image?.height ?? doc.height,
       info: { name: doc.name, lengthKm: doc.lengthKm },
@@ -100,6 +104,11 @@ export class Animator {
     const dpr = window.devicePixelRatio || 1;
     this.renderer.render(this.ctx, this.canvas.width / dpr, this.canvas.height / dpr, dpr, this.time, snap);
     this.updateTransport();
+  }
+
+  /** A map tile arrived: repaint the still frame (the play loop repaints anyway). */
+  redrawIfPaused(): void {
+    if (!this.playing) this.redraw();
   }
 
   play(): void {
@@ -166,7 +175,7 @@ export class Animator {
     if (rebuild) this.build();
     else if (this.renderer) {
       this.renderer.opts.camera = this.settings.camera;
-      if (this.renderer.opts.image) this.renderer.opts.theme = this.settings.theme;
+      if (this.renderer.opts.image || this.renderer.opts.tiles) this.renderer.opts.theme = this.settings.theme;
     }
     this.updateUi();
     this.redraw(!this.playing);
@@ -206,7 +215,8 @@ export class Animator {
 
   updateUi(): void {
     const s = this.settings;
-    const hasImage = !!this.source()?.image;
+    const src = this.source();
+    const hasImage = !!(src?.image || src?.tiles);
     document.querySelectorAll<HTMLButtonElement>('[data-cam]').forEach((b) => b.classList.toggle('active', b.dataset.cam === s.camera));
     document.querySelectorAll<HTMLButtonElement>('[data-theme]').forEach((b) => {
       b.classList.toggle('active', b.dataset.theme === (hasImage ? s.theme : 'broadcast'));
