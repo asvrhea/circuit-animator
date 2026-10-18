@@ -31,6 +31,15 @@
           <input type="range" id="tp-scrub" min="0" max="1000" step="1" value="0" aria-label="Scrub" />
           <span id="tp-time">0:00 / 0:00</span>
         </div>
+        <div class="export-overlay" id="export-overlay" hidden>
+          <div class="export-box">
+            <strong><span class="rec-dot"></span>RECORDING</strong>
+            <div class="export-bar"><i id="export-bar"></i></div>
+            <span id="export-status">0%</span>
+            <p class="help">Keep this tab open and visible. Recording runs in real time and pauses if you switch away.</p>
+            <button id="export-cancel">Cancel</button>
+          </div>
+        </div>
         <div class="dropmask" id="dropmask" hidden><span>DROP TO LOAD</span></div>
         <div class="empty" id="empty">
           <p class="empty-title">DROP A CIRCUIT SCREENSHOT</p>
@@ -64,6 +73,22 @@
           </div>
           <div id="lap-stats" class="stats"></div>
           <p class="help">Space play/pause · ←/→ skip 5 s · tap the view to play/pause</p>
+        </section>
+
+        <section id="sec-export" hidden>
+          <h2>Export</h2>
+          <div class="field"><span>Resolution</span>
+            <div class="seg"><button data-res="720">720p</button><button data-res="1080">1080p</button></div>
+          </div>
+          <div class="field"><span>Frame rate</span>
+            <div class="seg"><button data-fps="30">30 fps</button><button data-fps="60">60 fps</button></div>
+          </div>
+          <p class="help" id="export-info"></p>
+          <div class="row"><button id="btn-record" class="primary">Record video</button></div>
+          <div class="grid2" style="margin-top: 6px">
+            <button id="btn-png">PNG frame</button>
+            <button id="btn-json">Track JSON</button>
+          </div>
         </section>
 
         <section id="sec-source">

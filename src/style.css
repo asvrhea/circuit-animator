@@ -320,6 +320,39 @@ select {
 .transport input { flex: 1; }
 .transport span { font-variant-numeric: tabular-nums; color: var(--muted); font-weight: 600; white-space: nowrap; }
 
+/* ---------- export ---------- */
+.export-overlay {
+  position: absolute;
+  inset: auto 12px 64px 12px;
+  display: flex;
+  justify-content: center;
+  pointer-events: none;
+}
+.export-box {
+  pointer-events: auto;
+  width: min(420px, 100%);
+  display: grid;
+  gap: 8px;
+  padding: 12px 14px;
+  background: rgba(11, 13, 16, 0.92);
+  border-left: 3px solid var(--accent);
+}
+.export-box strong { letter-spacing: 0.12em; font-style: italic; }
+.export-box .help { margin: 0; }
+.rec-dot {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  margin-right: 8px;
+  border-radius: 50%;
+  background: var(--accent);
+  animation: blink 1s steps(2) infinite;
+}
+@keyframes blink { 50% { opacity: 0.2; } }
+.export-bar { height: 6px; background: rgba(255, 255, 255, 0.1); }
+.export-bar i { display: block; height: 100%; width: 0; background: var(--accent); }
+#export-status { font-variant-numeric: tabular-nums; color: var(--muted); font-weight: 600; }
+
 /* ---------- phone ---------- */
 @media (max-width: 760px) {
   #app {

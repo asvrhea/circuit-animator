@@ -4,7 +4,10 @@ import { AnimRenderer, type CameraMode, type ThemeMode } from '../render/anim';
 import { buildRace, formatLapTime, type Race } from '../sim/race';
 import type { TileLayer } from '../render/tiles';
 import { CAR_PRESETS, type CarPreset } from '../sim/speed';
-import { store } from './files';
+import { serializeDoc } from '../io/trackFile';
+import { estimateSizeMB, exportFileName, letterbox, videoBitrate, type Fps, type Resolution } from '../io/video';
+import { ExportCancelled, renderPng, supportedFormat, VideoExport } from './exporter';
+import { download, store } from './files';
 
 export interface AnimSource {
   doc: TrackDoc;
@@ -19,11 +22,13 @@ export interface AnimSettings {
   car: CarPreset;
   laps: number;
   speed: number;
+  res: Resolution;
+  fps: Fps;
 }
 
 const KEY = 'circuit-animator:anim';
 const SIM_SAMPLES = 1000;
-const DEFAULTS: AnimSettings = { camera: 'full', theme: 'broadcast', car: 'formula', laps: 3, speed: 1 };
+const DEFAULTS: AnimSettings = { camera: 'full', theme: 'broadcast', car: 'formula', laps: 3, speed: 1, res: 1080, fps: 30 };
 
 const $ = <T extends HTMLElement>(id: string): T => document.getElementById(id) as T;
 
@@ -54,7 +59,100 @@ export class Animator {
       /* keep defaults */
     }
     if (!(this.settings.car in CAR_PRESETS)) this.settings.car = DEFAULTS.car;
+    if (this.settings.res !== 720 && this.settings.res !== 1080) this.settings.res = DEFAULTS.res;
+    if (this.settings.fps !== 30 && this.settings.fps !== 60) this.settings.fps = DEFAULTS.fps;
     this.bindUi();
+    this.bindExport();
+    // repaint once the HUD font arrives
+    document.fonts?.ready.then(() => this.redraw()).catch(() => undefined);
+  }
+
+  // ------------------------------------------------------------ export
+
+  private job: VideoExport | null = null;
+
+  get exporting(): boolean {
+    return !!this.job;
+  }
+
+  private bindExport(): void {
+    document.querySelectorAll<HTMLButtonElement>('[data-res]').forEach((b) =>
+      b.addEventListener('click', () => this.change({ res: Number(b.dataset.res) as Resolution }, false)),
+    );
+    document.querySelectorAll<HTMLButtonElement>('[data-fps]').forEach((b) =>
+      b.addEventListener('click', () => this.change({ fps: Number(b.dataset.fps) as Fps }, false)),
+    );
+    $('btn-record').addEventListener('click', () => void this.record());
+    $('export-cancel').addEventListener('click', () => this.job?.cancel());
+    $('btn-png').addEventListener('click', () => void this.png());
+    $('btn-json').addEventListener('click', () => {
+      const doc = this.source()?.doc;
+      if (doc) download(exportFileName(doc.name, 'track', 'json'), serializeDoc(doc));
+    });
+  }
+
+  private async record(): Promise<void> {
+    const r = this.renderer;
+    if (!r || this.job) return;
+    this.pause();
+    const { res, fps, speed } = this.settings;
+    let job: VideoExport;
+    try {
+      job = new VideoExport(
+        { race: r.race, opts: { ...r.opts }, res, fps, speed },
+        (p) => {
+          $<HTMLElement>('export-bar').style.width = `${(p.done * 100).toFixed(1)}%`;
+          $('export-status').textContent =
+            p.waiting === 'hidden' ? 'Paused: tab hidden' : p.waiting === 'tiles' ? 'Loading map tiles…' :
+            `${Math.round(p.done * 100)}% · ${clock(p.done * r.race.total)} / ${clock(r.race.total)}`;
+        },
+        (frame) => this.preview(frame),
+      );
+    } catch (e) {
+      return alert(e instanceof Error ? e.message : String(e));
+    }
+    this.job = job;
+    this.setExportUi(true);
+    try {
+      const blob = await job.run();
+      const name = this.source()?.doc.name ?? 'circuit';
+      download(exportFileName(name, `${res}p${fps}`, job.format.ext), blob, blob.type);
+    } catch (e) {
+      if (!(e instanceof ExportCancelled)) alert(`Recording failed: ${e instanceof Error ? e.message : e}`);
+    } finally {
+      this.job = null;
+      this.setExportUi(false);
+      this.redraw(true);
+    }
+  }
+
+  private async png(): Promise<void> {
+    const r = this.renderer;
+    const doc = this.source()?.doc;
+    if (!r || !doc) return;
+    const blob = await renderPng({ race: r.race, opts: { ...r.opts }, res: this.settings.res }, this.time);
+    const t = Math.round(this.time * 10) / 10;
+    download(exportFileName(doc.name, `${this.settings.res}p-${t}s`, 'png'), blob, 'image/png');
+  }
+
+  /** Show the frame being recorded, letterboxed in the live canvas. */
+  private preview(frame: HTMLCanvasElement): void {
+    const dpr = window.devicePixelRatio || 1;
+    const w = this.canvas.width / dpr, h = this.canvas.height / dpr;
+    const b = letterbox(frame.width, frame.height, w, h);
+    this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    this.ctx.fillStyle = '#000';
+    this.ctx.fillRect(0, 0, w, h);
+    this.ctx.drawImage(frame, b.x, b.y, b.w, b.h);
+  }
+
+  private setExportUi(on: boolean): void {
+    $('export-overlay').hidden = !on;
+    $('transport').classList.toggle('off', on);
+    for (const id of ['btn-record', 'btn-png', 'tab-edit']) $<HTMLButtonElement>(id).disabled = on;
+    document.querySelectorAll<HTMLButtonElement>('#sec-anim button, #sec-anim select, #sec-anim input, #sec-export .seg button')
+      .forEach((el) => ((el as HTMLButtonElement).disabled = on));
+    if (!on) this.updateUi();
   }
 
   get race(): Race | null {
@@ -100,7 +198,7 @@ export class Animator {
   }
 
   redraw(snap = false): void {
-    if (!this.active || !this.renderer) return;
+    if (!this.active || !this.renderer || this.job) return;
     const dpr = window.devicePixelRatio || 1;
     this.renderer.render(this.ctx, this.canvas.width / dpr, this.canvas.height / dpr, dpr, this.time, snap);
     this.updateTransport();
@@ -112,7 +210,7 @@ export class Animator {
   }
 
   play(): void {
-    if (!this.renderer || this.playing) return;
+    if (!this.renderer || this.playing || this.job) return;
     if (this.time >= this.renderer.race.total - 1e-3) this.seek(0);
     this.playing = true;
     this.lastNow = performance.now();
@@ -152,6 +250,7 @@ export class Animator {
   }
 
   onKey(e: KeyboardEvent): boolean {
+    if (this.job) return false;
     if (e.key === ' ') {
       this.toggle();
       return true;
@@ -225,6 +324,16 @@ export class Animator {
     $<HTMLSelectElement>('car').value = s.car;
     $<HTMLInputElement>('laps').value = String(s.laps);
     $<HTMLSelectElement>('pb-speed').value = String(s.speed);
+    document.querySelectorAll<HTMLButtonElement>('[data-res]').forEach((b) => b.classList.toggle('active', Number(b.dataset.res) === s.res));
+    document.querySelectorAll<HTMLButtonElement>('[data-fps]').forEach((b) => b.classList.toggle('active', Number(b.dataset.fps) === s.fps));
+    const fmt = supportedFormat();
+    const rt = this.race;
+    $('export-info').textContent = !fmt
+      ? 'This browser cannot record video. Try Chrome or Edge.'
+      : rt
+        ? `${fmt.ext.toUpperCase()} · ${clock(rt.total / s.speed)} at ${s.speed}× · ~${Math.max(1, Math.round(estimateSizeMB(rt.total / s.speed, videoBitrate(s.res, s.fps))))} MB · records in real time`
+        : '';
+    $<HTMLButtonElement>('btn-record').disabled = !fmt || !!this.job;
 
     const r = this.race;
     $('lap-stats').innerHTML = r

@@ -124,6 +124,8 @@ export class App {
     for (const id of ['sec-source', 'sec-detect', 'sec-track', 'sec-map', 'sec-trace']) $(id).classList.toggle('off', anim);
     $('attrib').hidden = anim || !this.mapOn;
     $('sec-anim').hidden = !anim;
+    $('sec-export').hidden = !anim;
+    $('sec-file').classList.toggle('off', anim); // export section has its own JSON button
     $('transport').hidden = !anim;
     document.querySelector<HTMLElement>('.zoom')!.hidden = anim;
     if (anim) {
