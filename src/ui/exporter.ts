@@ -1,4 +1,4 @@
-import { pickFormat, RESOLUTIONS, videoBitrate, type Fps, type Resolution, type VideoFormat } from '../io/video';
+import { frameSize, pickFormat, videoBitrate, type Aspect, type Fps, type Resolution, type VideoFormat } from '../io/video';
 import { AnimRenderer, type AnimOptions } from '../render/anim';
 import { THEME } from '../render/theme';
 import type { Race } from '../sim/race';
@@ -7,6 +7,7 @@ export interface ExportJob {
   race: Race;
   opts: AnimOptions;
   res: Resolution;
+  aspect: Aspect;
   fps: Fps;
   /** playback speed: video length = race.total / speed */
   speed: number;
@@ -37,8 +38,8 @@ export function supportedFormat(): VideoFormat | null {
   return pickFormat((m) => MediaRecorder.isTypeSupported(m));
 }
 
-function makeCanvas(res: Resolution): { canvas: HTMLCanvasElement; ctx: CanvasRenderingContext2D; w: number; h: number } {
-  const { w, h } = RESOLUTIONS[res];
+function makeCanvas(res: Resolution, aspect: Aspect): { canvas: HTMLCanvasElement; ctx: CanvasRenderingContext2D; w: number; h: number } {
+  const { w, h } = frameSize(res, aspect);
   const canvas = document.createElement('canvas');
   canvas.width = w;
   canvas.height = h;
@@ -55,7 +56,7 @@ function tilesReady(r: AnimRenderer, w: number, h: number): boolean {
 /** One still frame at `time`, as PNG. */
 export async function renderPng(job: Omit<ExportJob, 'fps' | 'speed'>, time: number): Promise<Blob> {
   await fontsReady();
-  const { canvas, ctx, w, h } = makeCanvas(job.res);
+  const { canvas, ctx, w, h } = makeCanvas(job.res, job.aspect);
   const r = new AnimRenderer(job.race, { ...job.opts });
   r.render(ctx, w, h, 1, time, true);
   for (let i = 0; i < 40 && !tilesReady(r, w, h); i++) {
@@ -91,9 +92,9 @@ export class VideoExport {
   }
 
   async run(): Promise<Blob> {
-    const { race, opts, res, fps, speed } = this.job;
+    const { race, opts, res, aspect, fps, speed } = this.job;
     await fontsReady();
-    const { canvas, ctx, w, h } = makeCanvas(res);
+    const { canvas, ctx, w, h } = makeCanvas(res, aspect);
     const r = new AnimRenderer(race, { ...opts });
 
     // Manual frame push when available, so half-loaded frames are never sent.
@@ -126,7 +127,10 @@ export class VideoExport {
     await new Promise<void>((resolve) => {
       const tick = (now: number) => {
         if (this.cancelled) return resolve();
-        const dt = Math.min(0.25, (now - last) / 1000);
+        // No cap: the recorder stamps frames with wall-clock time, so race time must
+        // keep pace with it even when frames are slow, or the video plays in slow motion.
+        // (Deliberate holds — hidden tab, loading tiles — pause the recorder instead.)
+        const dt = (now - last) / 1000;
         last = now;
 
         const waiting: ExportProgress['waiting'] = document.hidden ? 'hidden' : tilesReady(r, w, h) ? '' : 'tiles';

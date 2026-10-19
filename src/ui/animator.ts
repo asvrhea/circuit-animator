@@ -5,7 +5,7 @@ import { buildRace, formatLapTime, type Race } from '../sim/race';
 import type { TileLayer } from '../render/tiles';
 import { CAR_PRESETS, type CarPreset } from '../sim/speed';
 import { serializeDoc } from '../io/trackFile';
-import { estimateSizeMB, exportFileName, letterbox, videoBitrate, type Fps, type Resolution } from '../io/video';
+import { estimateSizeMB, exportFileName, exportSuffix, frameSize, letterbox, videoBitrate, type Aspect, type Fps, type Resolution } from '../io/video';
 import { ExportCancelled, renderPng, supportedFormat, VideoExport } from './exporter';
 import { download, store } from './files';
 
@@ -24,11 +24,12 @@ export interface AnimSettings {
   speed: number;
   res: Resolution;
   fps: Fps;
+  aspect: Aspect;
 }
 
 const KEY = 'circuit-animator:anim';
 const SIM_SAMPLES = 1000;
-const DEFAULTS: AnimSettings = { camera: 'full', theme: 'broadcast', car: 'formula', laps: 3, speed: 1, res: 1080, fps: 30 };
+const DEFAULTS: AnimSettings = { camera: 'full', theme: 'broadcast', car: 'formula', laps: 3, speed: 1, res: 1080, fps: 30, aspect: '16:9' };
 
 const $ = <T extends HTMLElement>(id: string): T => document.getElementById(id) as T;
 
@@ -60,6 +61,7 @@ export class Animator {
     }
     if (!(this.settings.car in CAR_PRESETS)) this.settings.car = DEFAULTS.car;
     if (this.settings.res !== 720 && this.settings.res !== 1080) this.settings.res = DEFAULTS.res;
+    if (this.settings.aspect !== '16:9' && this.settings.aspect !== '9:16') this.settings.aspect = DEFAULTS.aspect;
     if (this.settings.fps !== 30 && this.settings.fps !== 60) this.settings.fps = DEFAULTS.fps;
     this.bindUi();
     this.bindExport();
@@ -76,6 +78,9 @@ export class Animator {
   }
 
   private bindExport(): void {
+    document.querySelectorAll<HTMLButtonElement>('[data-aspect]').forEach((b) =>
+      b.addEventListener('click', () => this.change({ aspect: b.dataset.aspect as Aspect }, false)),
+    );
     document.querySelectorAll<HTMLButtonElement>('[data-res]').forEach((b) =>
       b.addEventListener('click', () => this.change({ res: Number(b.dataset.res) as Resolution }, false)),
     );
@@ -95,11 +100,11 @@ export class Animator {
     const r = this.renderer;
     if (!r || this.job) return;
     this.pause();
-    const { res, fps, speed } = this.settings;
+    const { res, fps, speed, aspect } = this.settings;
     let job: VideoExport;
     try {
       job = new VideoExport(
-        { race: r.race, opts: { ...r.opts }, res, fps, speed },
+        { race: r.race, opts: { ...r.opts }, res, aspect, fps, speed },
         (p) => {
           $<HTMLElement>('export-bar').style.width = `${(p.done * 100).toFixed(1)}%`;
           $('export-status').textContent =
@@ -116,7 +121,7 @@ export class Animator {
     try {
       const blob = await job.run();
       const name = this.source()?.doc.name ?? 'circuit';
-      download(exportFileName(name, `${res}p${fps}`, job.format.ext), blob, blob.type);
+      download(exportFileName(name, exportSuffix(res, fps, aspect), job.format.ext), blob, blob.type);
     } catch (e) {
       if (!(e instanceof ExportCancelled)) alert(`Recording failed: ${e instanceof Error ? e.message : e}`);
     } finally {
@@ -130,9 +135,9 @@ export class Animator {
     const r = this.renderer;
     const doc = this.source()?.doc;
     if (!r || !doc) return;
-    const blob = await renderPng({ race: r.race, opts: { ...r.opts }, res: this.settings.res }, this.time);
+    const blob = await renderPng({ race: r.race, opts: { ...r.opts }, res: this.settings.res, aspect: this.settings.aspect }, this.time);
     const t = Math.round(this.time * 10) / 10;
-    download(exportFileName(doc.name, `${this.settings.res}p-${t}s`, 'png'), blob, 'image/png');
+    download(exportFileName(doc.name, `${this.settings.res}p${this.settings.aspect === '9:16' ? '-vertical' : ''}-${t}s`, 'png'), blob, 'image/png');
   }
 
   /** Show the frame being recorded, letterboxed in the live canvas. */
@@ -200,7 +205,13 @@ export class Animator {
   redraw(snap = false): void {
     if (!this.active || !this.renderer || this.job) return;
     const dpr = window.devicePixelRatio || 1;
-    this.renderer.render(this.ctx, this.canvas.width / dpr, this.canvas.height / dpr, dpr, this.time, snap);
+    const cssW = this.canvas.width / dpr, cssH = this.canvas.height / dpr;
+    const { w: fw, h: fh } = frameSize(this.settings.res, this.settings.aspect);
+    const box = letterbox(fw, fh, cssW, cssH);
+    this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    this.ctx.fillStyle = '#000';
+    this.ctx.fillRect(0, 0, cssW, cssH);
+    this.renderer.render(this.ctx, box.w, box.h, dpr, this.time, snap, { ox: box.x, oy: box.y, uiScale: Math.min(box.w, box.h) / 720 });
     this.updateTransport();
   }
 
@@ -324,14 +335,16 @@ export class Animator {
     $<HTMLSelectElement>('car').value = s.car;
     $<HTMLInputElement>('laps').value = String(s.laps);
     $<HTMLSelectElement>('pb-speed').value = String(s.speed);
+    document.querySelectorAll<HTMLButtonElement>('[data-aspect]').forEach((b) => b.classList.toggle('active', b.dataset.aspect === s.aspect));
     document.querySelectorAll<HTMLButtonElement>('[data-res]').forEach((b) => b.classList.toggle('active', Number(b.dataset.res) === s.res));
     document.querySelectorAll<HTMLButtonElement>('[data-fps]').forEach((b) => b.classList.toggle('active', Number(b.dataset.fps) === s.fps));
     const fmt = supportedFormat();
+    const fs = frameSize(s.res, s.aspect);
     const rt = this.race;
     $('export-info').textContent = !fmt
       ? 'This browser cannot record video. Try Chrome or Edge.'
       : rt
-        ? `${fmt.ext.toUpperCase()} · ${clock(rt.total / s.speed)} at ${s.speed}× · ~${Math.max(1, Math.round(estimateSizeMB(rt.total / s.speed, videoBitrate(s.res, s.fps))))} MB · records in real time`
+        ? `${fs.w}×${fs.h} · ${fmt.ext.toUpperCase()} · ${clock(rt.total / s.speed)} at ${s.speed}× · ~${Math.max(1, Math.round(estimateSizeMB(rt.total / s.speed, videoBitrate(s.res, s.fps))))} MB · records in real time`
         : '';
     $<HTMLButtonElement>('btn-record').disabled = !fmt || !!this.job;
 

@@ -1,7 +1,19 @@
 import { describe, expect, it } from 'vitest';
-import { estimateSizeMB, exportFileName, letterbox, pickFormat, videoBitrate } from '../../src/io/video';
+import { estimateSizeMB, exportFileName, exportSuffix, frameSize, letterbox, pickFormat, videoBitrate } from '../../src/io/video';
 
 describe('video export settings', () => {
+  it('sizes frames for both aspects', () => {
+    expect(frameSize(1080, '16:9')).toEqual({ w: 1920, h: 1080 });
+    expect(frameSize(720, '16:9')).toEqual({ w: 1280, h: 720 });
+    expect(frameSize(1080, '9:16')).toEqual({ w: 1080, h: 1920 });
+    expect(frameSize(720, '9:16')).toEqual({ w: 720, h: 1280 });
+  });
+
+  it('builds export suffixes', () => {
+    expect(exportSuffix(1080, 60, '16:9')).toBe('1080p60');
+    expect(exportSuffix(1080, 60, '9:16')).toBe('1080p60-vertical');
+  });
+
   it('prefers MP4 when the browser can record it', () => {
     expect(pickFormat((m) => m.startsWith('video/mp4'))?.ext).toBe('mp4');
     expect(pickFormat((m) => m === 'video/mp4;codecs=avc1')?.mime).toBe('video/mp4;codecs=avc1');

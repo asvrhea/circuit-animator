@@ -2,11 +2,23 @@
 
 export type Resolution = 720 | 1080;
 export type Fps = 30 | 60;
+export type Aspect = '16:9' | '9:16';
 
 export const RESOLUTIONS: Record<Resolution, { w: number; h: number }> = {
   720: { w: 1280, h: 720 },
   1080: { w: 1920, h: 1080 },
 };
+
+/** Output frame size: 16:9 landscape, or the same pixels turned 9:16 for Reels/Shorts/TikTok. */
+export function frameSize(res: Resolution, aspect: Aspect): { w: number; h: number } {
+  const { w, h } = RESOLUTIONS[res];
+  return aspect === '9:16' ? { w: h, h: w } : { w, h };
+}
+
+/** File name part such as `1080p60` or `1080p60-vertical`. */
+export function exportSuffix(res: Resolution, fps: Fps, aspect: Aspect): string {
+  return `${res}p${fps}${aspect === '9:16' ? '-vertical' : ''}`;
+}
 
 export interface VideoFormat {
   mime: string;

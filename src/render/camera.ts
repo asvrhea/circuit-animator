@@ -43,12 +43,12 @@ export class Camera implements CamPose {
   }
 
   /** Set ctx so world coordinates draw through this camera (on top of a DPR scale). */
-  apply(ctx: CanvasRenderingContext2D, dpr: number): void {
+  apply(ctx: CanvasRenderingContext2D, dpr: number, ox = 0, oy = 0): void {
     const c = Math.cos(this.rot) * this.scale, s = Math.sin(this.rot) * this.scale;
     ctx.setTransform(
       dpr * c, dpr * s, -dpr * s, dpr * c,
-      dpr * (this.ax - (c * this.cx - s * this.cy)),
-      dpr * (this.ay - (s * this.cx + c * this.cy)),
+      dpr * (this.ax + ox - (c * this.cx - s * this.cy)),
+      dpr * (this.ay + oy - (s * this.cx + c * this.cy)),
     );
   }
 

@@ -52,12 +52,14 @@ export class AnimRenderer {
   }
 
   /** Render `time`; `snap` jumps the camera instead of easing (seeking, first frame). */
-  render(ctx: Ctx, w: number, h: number, dpr: number, time: number, snap = false): RaceState {
+  render(ctx: Ctx, w: number, h: number, dpr: number, time: number, snap = false, frame?: { ox: number; oy: number; uiScale: number }): RaceState {
     const r = this.race;
     const s = raceState(r, time);
     const dt = this.lastTime < 0 || snap ? 0 : time - this.lastTime;
     this.lastTime = time;
-    const u = Math.max(0.6, Math.min(w, h) / 720);
+    const u = frame ? frame.uiScale : Math.max(0.6, Math.min(w, h) / 720);
+    const ox = frame?.ox ?? 0, oy = frame?.oy ?? 0;
+    const base = () => ctx.setTransform(dpr, 0, 0, dpr, ox * dpr, oy * dpr);
 
     // ---- camera
     const pose = poseAt(r.path, s.index, s.frac);
@@ -77,12 +79,18 @@ export class AnimRenderer {
     const zoomRel = this.cam.scale / fit.scale;
 
     // ---- background
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.save();
+    base();
+    if (frame) {
+      ctx.beginPath();
+      ctx.rect(0, 0, w, h);
+      ctx.clip();
+    }
     ctx.fillStyle = THEME.bg;
     ctx.fillRect(0, 0, w, h);
     const useTiles = this.opts.theme === 'screenshot' && !!this.opts.tiles;
     const useImage = this.opts.theme === 'screenshot' && (!!this.opts.image || useTiles);
-    this.cam.apply(ctx, dpr);
+    this.cam.apply(ctx, dpr, ox, oy);
     if (useTiles) {
       // muted map so the track and HUD read first
       ctx.filter = 'grayscale(0.7) brightness(0.8) contrast(1.05)';
@@ -94,7 +102,7 @@ export class AnimRenderer {
     } else {
       this.drawGrid(ctx);
     }
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    base();
     if (useImage) {
       ctx.fillStyle = 'rgba(11,13,16,0.45)';
       ctx.fillRect(0, 0, w, h);
@@ -131,6 +139,7 @@ export class AnimRenderer {
       ctx.fillStyle = 'rgba(232,236,241,0.75)';
       ctx.fillText(OSM_ATTRIBUTION, w - 6 * u, h - 3 * u);
     }
+    ctx.restore();
     return s;
   }
 

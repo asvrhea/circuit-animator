@@ -31,9 +31,9 @@ The **Animate** tab simulates the lap: corner speed from curvature and grip, wit
 braking limits, a standing start on lap 1, sector times and a speed readout. Choose camera (full track
 or follow), theme (broadcast or map), car (Formula / GT / Road car), laps and playback speed.
 
-**Export**: *Record video* renders 720p/1080p at 30/60 fps and downloads MP4 where the browser
+**Export**: *Record video* renders 720p/1080p at 30/60 fps, in 16:9 landscape or 9:16 vertical (for Reels, Shorts and TikTok), and downloads MP4 where the browser
 supports it (Chrome, Edge, Safari), otherwise WebM. Recording runs in real time at the chosen playback
-speed, so keep the tab visible; it pauses if you switch away. *PNG frame* saves the current frame.
+speed, so keep the tab visible; it pauses if you switch away. *PNG frame* saves the current frame in the same format. The Animate view always shows the exact export frame, letterboxed.
 
 Map tiles and place search © OpenStreetMap contributors. No series, team or trademarked graphics.
 
