@@ -120,6 +120,7 @@
           <div class="row">
             <button id="btn-trace-undo">Undo point</button>
             <button id="btn-trace-done" class="primary">Finish</button>
+            <button id="btn-trace-stage">Finish as stage</button>
             <button id="btn-trace-cancel">Cancel</button>
           </div>
         </section>
@@ -143,6 +144,16 @@
         <section id="sec-track" hidden>
           <h2>Track</h2>
           <p class="help">Drag points · tap the line to add one · right-click or long-press a point to delete</p>
+          <div class="seg" id="discipline">
+            <button data-discipline="formula">Formula</button>
+            <button data-discipline="rally">Rally stage</button>
+            <button data-discipline="mix">Mix</button>
+          </div>
+          <p class="help" id="discipline-help"></p>
+          <div class="grid2" id="surface-tools" hidden>
+            <button id="btn-gravel">Mark gravel</button>
+            <button id="btn-tarmac">Mark tarmac</button>
+          </div>
           <div class="grid2">
             <button id="btn-straight">Straighten</button>
             <button id="btn-corner">Corner</button>

@@ -18,6 +18,10 @@ All five phases done. 94 tests, `npm run build` green (81 kB JS, 30 kB gzip), ve
   MP4 plays (1280x720, 10.9 s), 1080p PNG. README rewritten as app docs.
 - 9:16 vertical export (720x1280 / 1080x1920); Animate view letterboxes the exact export frame; exporter race
   time follows the wall clock uncapped (fixes slow-motion videos when frames are slow).
+- Disciplines (JSON `discipline`: formula | rally | mix, `gravel`: [[from,to]] fractions): rally = open point-to-point
+  stage (open spline/curvature, standing start + flying finish, one run, splits, START/FINISH, cool-down past finish),
+  mix = closed circuit with gravel stretches; surface grip scales speed profile; Rally car preset; Mark gravel/tarmac
+  tool; KML/screenshot lines with two ends load as stages; Straighten/Corner disabled on stages (follow-up).
 - Editor tools: Straighten (two taps → exact straight via collinear helper points, start kept); Corner
   (tap → slider scales the corner about its vertex, tighter = slower in Animate). Both undoable.
 

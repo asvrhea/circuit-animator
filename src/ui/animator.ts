@@ -1,5 +1,5 @@
 import { pathFromControls } from '../geom/track';
-import type { TrackDoc } from '../io/trackFile';
+import { isOpen, type Discipline, type TrackDoc } from '../io/trackFile';
 import { AnimRenderer, type CameraMode, type ThemeMode } from '../render/anim';
 import { buildRace, formatLapTime, type Race } from '../sim/race';
 import type { TileLayer } from '../render/tiles';
@@ -176,13 +176,20 @@ export class Animator {
     this.active = false;
   }
 
+  /** Pick the default car for a discipline (rally car for rally and mix). */
+  carForDiscipline(d: Discipline): void {
+    this.change({ car: d === 'formula' ? 'formula' : 'rally' }, this.active);
+  }
+
   /** Rebuild the race from the current track + settings. */
   build(): void {
     const src = this.source();
     if (!src) return;
     const { doc, image, tiles } = src;
     const race = buildRace({
-      path: pathFromControls(doc.controls, SIM_SAMPLES),
+      path: pathFromControls(doc.controls, SIM_SAMPLES, !isOpen(doc)),
+      closed: !isOpen(doc),
+      gravel: doc.gravel ?? [],
       lengthKm: doc.lengthKm,
       car: CAR_PRESETS[this.settings.car].car,
       laps: this.settings.laps,
@@ -333,7 +340,11 @@ export class Animator {
       if (b.dataset.theme === 'screenshot') b.disabled = !hasImage;
     });
     $<HTMLSelectElement>('car').value = s.car;
-    $<HTMLInputElement>('laps').value = String(s.laps);
+    const stage = !!src && isOpen(src.doc);
+    const lapsEl = $<HTMLInputElement>('laps');
+    lapsEl.value = String(stage ? 1 : s.laps);
+    lapsEl.disabled = stage;
+    lapsEl.title = stage ? 'A rally stage is one run' : '';
     $<HTMLSelectElement>('pb-speed').value = String(s.speed);
     document.querySelectorAll<HTMLButtonElement>('[data-aspect]').forEach((b) => b.classList.toggle('active', b.dataset.aspect === s.aspect));
     document.querySelectorAll<HTMLButtonElement>('[data-res]').forEach((b) => b.classList.toggle('active', Number(b.dataset.res) === s.res));
@@ -350,8 +361,10 @@ export class Animator {
 
     const r = this.race;
     $('lap-stats').innerHTML = r
-      ? `<span>Flying lap <b>${formatLapTime(r.flying.lapTime)}</b></span>` +
-        `<span>Standing start <b>${formatLapTime(r.first.lapTime)}</b></span>` +
+      ? (stage
+          ? `<span>Stage time <b>${formatLapTime(r.first.lapTime)}</b></span>`
+          : `<span>Flying lap <b>${formatLapTime(r.flying.lapTime)}</b></span>` +
+            `<span>Standing start <b>${formatLapTime(r.first.lapTime)}</b></span>`) +
         `<span>Top <b>${Math.round(r.topSpeed * 3.6)}</b> km/h</span>` +
         `<span>Slowest corner <b>${Math.round(r.minSpeed * 3.6)}</b> km/h</span>` +
         `<span>Video <b>${clock(r.total / s.speed)}</b> at ${s.speed}×</span>`

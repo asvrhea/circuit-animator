@@ -62,7 +62,7 @@ export class AnimRenderer {
     const base = () => ctx.setTransform(dpr, 0, 0, dpr, ox * dpr, oy * dpr);
 
     // ---- camera
-    const pose = poseAt(r.path, s.index, s.frac);
+    const pose = poseAt(r.path, s.index, s.frac, r.closed);
     let dh = pose.heading - this.heading;
     dh = Math.atan2(Math.sin(dh), Math.cos(dh));
     this.heading = snap ? pose.heading : this.heading + dh * (1 - Math.exp(-Math.max(0, dt) / 0.12));
@@ -124,7 +124,7 @@ export class AnimRenderer {
       this.drawTrail(ctx, time, trackW);
       this.drawCar(ctx, this.cam.toScreen(pose.p), this.heading + this.cam.rot, trackW);
     } else if (reveal >= 1) {
-      this.drawCar(ctx, this.cam.toScreen(r.path[0]), poseAt(r.path, 0, 0).heading + this.cam.rot, trackW);
+      this.drawCar(ctx, this.cam.toScreen(r.path[0]), poseAt(r.path, 0, 0, r.closed).heading + this.cam.rot, trackW);
     }
 
     // ---- overlays
@@ -166,7 +166,9 @@ export class AnimRenderer {
   private drawTrack(ctx: Ctx, W: number, reveal: number, s: RaceState): void {
     const pts = this.race.path.map((p) => this.cam.toScreen(p));
     const n = pts.length;
-    const end = Math.max(1, Math.round(reveal * n));
+    const closed = this.race.closed;
+    const span = closed ? n : n - 1;
+    const end = Math.max(1, Math.round(reveal * span));
     const stroke = (from: number, to: number) => {
       ctx.beginPath();
       ctx.moveTo(pts[from % n].x, pts[from % n].y);
@@ -186,7 +188,23 @@ export class AnimRenderer {
     ctx.lineWidth = Math.max(1, W * 0.12);
     stroke(0, end);
 
-    const cuts = [0, Math.round(this.race.sectors[0] * n), Math.round(this.race.sectors[1] * n), n];
+    // gravel stretches over the asphalt
+    for (const [f0, f1] of this.race.gravel) {
+      const a = Math.round(f0 * span), b = Math.min(Math.round(f1 * span), end);
+      if (b <= a) continue;
+      ctx.strokeStyle = THEME.gravel;
+      ctx.lineWidth = W;
+      stroke(a, b);
+      ctx.save();
+      ctx.setLineDash([W * 0.6, W * 0.6]);
+      ctx.lineCap = 'butt';
+      ctx.strokeStyle = 'rgba(230,205,160,0.5)';
+      ctx.lineWidth = Math.max(1, W * 0.2);
+      stroke(a, b);
+      ctx.restore();
+    }
+
+    const cuts = [0, Math.round(this.race.sectors[0] * span), Math.round(this.race.sectors[1] * span), span];
     for (let k = 0; k < 3; k++) {
       const a = cuts[k], b = Math.min(cuts[k + 1], end);
       if (b <= a) continue;
@@ -200,7 +218,7 @@ export class AnimRenderer {
 
     // head of the draw-in
     if (reveal < 1) {
-      const p = pts[end % n];
+      const p = pts[Math.min(end, n - 1) % n];
       const g = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, W * 3);
       g.addColorStop(0, 'rgba(255,255,255,0.9)');
       g.addColorStop(1, 'rgba(255,255,255,0)');
@@ -210,22 +228,52 @@ export class AnimRenderer {
       ctx.fill();
       return;
     }
-    this.drawStartLine(ctx, pts, W);
+    if (closed) {
+      this.drawBar(ctx, pts[0], normalize(sub(pts[2 % n], pts[n - 2])), W, true);
+    } else {
+      const t0 = normalize(sub(pts[Math.min(2, n - 1)], pts[0]));
+      const t1 = normalize(sub(pts[n - 1], pts[Math.max(0, n - 3)]));
+      this.drawBar(ctx, pts[0], t0, W, false);
+      this.drawBar(ctx, pts[n - 1], t1, W, true);
+      this.drawLabel(ctx, 'START', pts[0], t0, W);
+      this.drawLabel(ctx, 'FINISH', pts[n - 1], t1, W);
+    }
   }
 
-  private drawStartLine(ctx: Ctx, pts: Vec2[], W: number): void {
-    const n = pts.length;
-    const t = normalize(sub(pts[2 % n], pts[n - 2]));
+  /** Chequered (or solid green) bar across the track at p, perpendicular to tangent t. */
+  private drawBar(ctx: Ctx, p: Vec2, t: Vec2, W: number, chequer: boolean): void {
     const half = W * 0.5 + 4;
     const cells = 6, cw = (2 * half) / cells;
     ctx.save();
-    ctx.translate(pts[0].x, pts[0].y);
+    ctx.translate(p.x, p.y);
     ctx.rotate(Math.atan2(t.x, -t.y));
-    for (let r = 0; r < 2; r++)
-      for (let c = 0; c < cells; c++) {
-        ctx.fillStyle = (r + c) % 2 ? '#000' : '#fff';
-        ctx.fillRect(-half + c * cw, -cw + r * cw, cw, cw);
-      }
+    if (chequer) {
+      for (let r = 0; r < 2; r++)
+        for (let c = 0; c < cells; c++) {
+          ctx.fillStyle = (r + c) % 2 ? '#000' : '#fff';
+          ctx.fillRect(-half + c * cw, -cw + r * cw, cw, cw);
+        }
+    } else {
+      ctx.fillStyle = '#2bd96b';
+      ctx.fillRect(-half, -cw, 2 * half, 2 * cw);
+    }
+    ctx.restore();
+  }
+
+  private drawLabel(ctx: Ctx, text: string, p: Vec2, t: Vec2, W: number): void {
+    const size = Math.max(9, W * 0.7);
+    const off = W * 0.5 + size * 1.2;
+    // place beside the track (left normal on screen)
+    const x = p.x + t.y * off, y = p.y - t.x * off;
+    ctx.save();
+    ctx.font = `700 ${size}px ${THEME.font}`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.lineWidth = Math.max(2, size * 0.25);
+    ctx.strokeStyle = 'rgba(0,0,0,0.8)';
+    ctx.strokeText(text, x, y);
+    ctx.fillStyle = '#fff';
+    ctx.fillText(text, x, y);
     ctx.restore();
   }
 
@@ -237,7 +285,7 @@ export class AnimRenderer {
       const t = time - k * TRAIL_DT;
       if (t < raceStart) break;
       const st = raceState(r, t);
-      pts.push(this.cam.toScreen(poseAt(r.path, st.index, st.frac).p));
+      pts.push(this.cam.toScreen(poseAt(r.path, st.index, st.frac, r.closed).p));
     }
     ctx.lineCap = 'round';
     for (let k = 0; k < pts.length - 1; k++) {
@@ -322,8 +370,17 @@ export class AnimRenderer {
       if (i) ctx.lineTo(q.x, q.y);
       else ctx.moveTo(q.x, q.y);
     });
-    ctx.closePath();
+    if (this.race.closed) ctx.closePath();
     ctx.stroke();
+    if (!this.race.closed) {
+      const f = map(this.race.path[this.race.path.length - 1]);
+      const q = 3 * u;
+      ctx.fillStyle = '#fff';
+      ctx.fillRect(f.x - q, f.y - q, 2 * q, 2 * q);
+      ctx.fillStyle = '#000';
+      ctx.fillRect(f.x - q, f.y - q, q, q);
+      ctx.fillRect(f.x, f.y, q, q);
+    }
     const c = map(car);
     ctx.fillStyle = THEME.accent;
     ctx.beginPath();

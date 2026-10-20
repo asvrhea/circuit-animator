@@ -25,6 +25,18 @@ Editing: drag points, tap the line to add one, right-click or long-press to dele
 length (e.g. measured in My Maps) or use *Calibrate scale*: tap two points and enter the real distance
 between them (Google Maps → long-press → *Measure distance*). Map and KML tracks already know their scale.
 
+### Disciplines
+
+Pick one in the Track section.
+
+- **Formula**: closed circuit, all tarmac.
+- **Rally stage**: a point-to-point run. The first point is the start and the last point the finish, with no laps. The stage is gravel unless you mark tarmac.
+- **Mix**: closed circuit with gravel stretches.
+
+Use *Mark gravel* or *Mark tarmac* (rally and mix), then tap where the stretch starts and where it ends. A KML/GPX file or a detected or drawn line with two ends loads as a rally stage; use *Finish as stage* when tracing.
+
+Track JSON fields: `discipline` (`"formula"` | `"rally"` | `"mix"`) and `gravel` (`[[from, to], ...]`, fractions of track length).
+
 ## Animating and exporting
 
 The **Animate** tab simulates the lap: corner speed from curvature and grip, with acceleration and

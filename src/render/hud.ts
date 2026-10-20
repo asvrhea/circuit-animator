@@ -39,7 +39,7 @@ export function drawHud(ctx: Ctx, _w: number, h: number, u: number, r: Race, s: 
   ctx.fillText(clip(ctx, info.name.toUpperCase(), tw * 0.58), m + 14 * u, y + 14.5 * u);
   ctx.textAlign = 'right';
   ctx.font = font(700, 15 * u);
-  ctx.fillText(`LAP ${s.lap}/${r.laps}`, m + tw - 14 * u, y + 14.5 * u);
+  ctx.fillText(r.closed ? `LAP ${s.lap}/${r.laps}` : 'STAGE', m + tw - 14 * u, y + 14.5 * u);
   y += 28 * u;
 
   // ---- lap timer
@@ -47,7 +47,7 @@ export function drawHud(ctx: Ctx, _w: number, h: number, u: number, r: Race, s: 
   ctx.textAlign = 'left';
   ctx.fillStyle = THEME.muted;
   ctx.font = font(600, 12 * u);
-  ctx.fillText(s.finished ? 'FINAL LAP' : 'LAP TIME', m + 14 * u, y + 14 * u);
+  ctx.fillText(r.closed ? (s.finished ? 'FINAL LAP' : 'LAP TIME') : s.finished ? 'FINAL TIME' : 'STAGE TIME',m + 14 * u, y + 14 * u);
   ctx.fillStyle = THEME.text;
   ctx.font = font(700, 36 * u);
   ctx.fillText(formatLapTime(s.lapTime), m + 12 * u, y + 38 * u);
@@ -62,7 +62,7 @@ export function drawHud(ctx: Ctx, _w: number, h: number, u: number, r: Race, s: 
     ctx.font = font(700, 14 * u);
     ctx.textAlign = 'left';
     ctx.fillStyle = k === s.sector && !s.finished ? THEME.text : THEME.muted;
-    ctx.fillText(`S${k + 1}`, m + 14 * u, y + rowH / 2);
+    ctx.fillText(r.closed ? `S${k + 1}` : k < 2 ? `SPLIT ${k + 1}` : 'FINISH', m + 14 * u, y + rowH / 2);
     ctx.textAlign = 'right';
     const split = s.sectorSplits[k];
     ctx.fillStyle = split !== undefined ? THEME.text : THEME.muted;
@@ -71,7 +71,7 @@ export function drawHud(ctx: Ctx, _w: number, h: number, u: number, r: Race, s: 
   }
 
   // ---- last / best
-  if (s.lapTimes.length) {
+  if (r.closed && s.lapTimes.length) {
     const rowH = 24 * u;
     slab(ctx, m, y, tw, rowH, PANEL);
     const last = s.lapTimes[s.lapTimes.length - 1];
@@ -104,6 +104,20 @@ function drawSpeed(ctx: Ctx, h: number, u: number, r: Race, s: RaceState): void 
   ctx.fillStyle = THEME.muted;
   ctx.font = font(700, 15 * u);
   ctx.fillText('KM/H', x + 126 * u, y + 50 * u);
+
+  // surface chip (only on mixed-surface tracks)
+  if (r.gravel.length > 0) {
+    const gravel = s.surface === 'gravel';
+    const cx = x + 122 * u, cy = y + 18 * u, cw = 29 * u, chh = 14 * u;
+    ctx.fillStyle = gravel ? THEME.gravel : '#3a414c';
+    ctx.fillRect(cx, cy, cw, chh);
+    ctx.fillStyle = '#fff';
+    ctx.font = font(700, 10 * u);
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(gravel ? 'GRAVEL' : 'TARMAC', cx + cw / 2, cy + chh / 2 + 0.5 * u);
+    ctx.textBaseline = 'alphabetic';
+  }
 
   // speed bar
   const barX = x + 14 * u, barY = y + 62 * u, barW = bw - 36 * u, barH = 6 * u;
@@ -151,7 +165,11 @@ export function drawTitles(ctx: Ctx, w: number, h: number, u: number, r: Race, s
     ctx.fillText(clip(ctx, info.name.toUpperCase(), bw - 40 * u), x + 24 * u, y + 24 * u);
     ctx.fillStyle = THEME.muted;
     ctx.font = font(600, 15 * u);
-    ctx.fillText(`${info.lengthKm.toFixed(3)} KM · ${r.laps} ${r.laps === 1 ? 'LAP' : 'LAPS'}`, x + 24 * u, y + 47 * u);
+    const km = info.lengthKm.toFixed(3);
+    const sub = !r.closed
+      ? `${km} KM · RALLY STAGE`
+      : `${km} KM · ${r.laps} ${r.laps === 1 ? 'LAP' : 'LAPS'}${r.gravel.length > 0 ? ' · MIXED SURFACE' : ''}`;
+    ctx.fillText(sub, x + 24 * u, y + 47 * u);
     ctx.globalAlpha = 1;
     return;
   }
@@ -166,11 +184,12 @@ export function drawTitles(ctx: Ctx, w: number, h: number, u: number, r: Race, s
     ctx.textBaseline = 'middle';
     ctx.fillStyle = THEME.text;
     ctx.font = font(800, 24 * u, true);
-    ctx.fillText('FINISH', x + 76 * u, y + 28 * u);
+    ctx.fillText(r.closed ? 'FINISH' : 'STAGE COMPLETE', x + 76 * u, y + 28 * u);
     ctx.fillStyle = THEME.muted;
     ctx.font = font(600, 15 * u);
     const total = s.lapTimes.reduce((a2, b) => a2 + b, 0);
-    ctx.fillText(`TOTAL ${formatLapTime(total)} · BEST ${formatLapTime(Math.min(...s.lapTimes))}`, x + 76 * u, y + 54 * u);
+    if (r.closed) ctx.fillText(`TOTAL ${formatLapTime(total)} · BEST ${formatLapTime(Math.min(...s.lapTimes))}`, x + 76 * u, y + 54 * u);
+    else ctx.fillText(`TIME ${formatLapTime(s.lapTimes.length ? total : s.lapTime)}`, x + 76 * u, y + 54 * u);
     ctx.globalAlpha = 1;
   }
 }

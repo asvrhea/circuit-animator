@@ -7,9 +7,10 @@ import { polylineLength } from '../geom/polyline';
 import { groundMetresPerUnit, toUnits, WORLD } from '../geom/tiles';
 import { pathFromControls } from '../geom/track';
 import { dist, type Vec2 } from '../geom/vec2';
+import { addRange, removeRange, reverseRanges } from '../sim/surface';
 import { geoToTrack, parseGeoFile } from '../io/geo';
 import {
-  calibrate, DEFAULT_SECTORS, newDoc, parseDoc, serializeDoc, syncLength, withLength, type TrackDoc,
+  calibrate, DEFAULT_SECTORS, DISCIPLINES, disciplineOf, isOpen, newDoc, setDiscipline, parseDoc, serializeDoc, syncLength, withLength, type Discipline, type TrackDoc,
 } from '../io/trackFile';
 import { drawEditor } from '../render/editor';
 import { curvatureClosed } from '../sim/curvature';
@@ -21,7 +22,7 @@ import type { RGB } from '../vision/types';
 import { Animator } from './animator';
 import { download, fileKind, loadImage, store } from './files';
 
-type Mode = 'edit' | 'pick' | 'trace' | 'start' | 'split0' | 'split1' | 'calibrate' | 'straight' | 'corner';
+type Mode = 'edit' | 'pick' | 'trace' | 'start' | 'split0' | 'split1' | 'calibrate' | 'straight' | 'corner' | 'gravel' | 'tarmac';
 
 type Gesture =
   | { kind: 'drag'; index: number; start: Vec2; moved: boolean; before: TrackDoc }
@@ -46,6 +47,14 @@ const HINTS: Record<Mode, string> = {
   calibrate: 'TAP TWO POINTS A KNOWN DISTANCE APART',
   straight: 'TAP ONE END OF THE STRAIGHT',
   corner: 'TAP A CORNER · THEN USE THE SLIDER',
+  gravel: 'TAP WHERE THE GRAVEL STARTS, THEN WHERE IT ENDS',
+  tarmac: 'TAP WHERE THE TARMAC STARTS, THEN WHERE IT ENDS',
+};
+
+const DISCIPLINE_HELP: Record<Discipline, string> = {
+  formula: 'Closed circuit, tarmac.',
+  rally: 'Point-to-point: first point is the start, last point the finish. Gravel unless marked tarmac.',
+  mix: 'Closed circuit with tarmac and gravel stretches.',
 };
 
 const $ = <T extends HTMLElement>(id: string): T => document.getElementById(id) as T;
@@ -76,6 +85,8 @@ export class App {
   /** corner being adjusted: slider positions apply to `base`; `before` is set while a change is uncommitted */
   private corner: { corner: Corner; base: Vec2[]; before: TrackDoc | null } | null = null;
   private hot = -1;
+  /** first tap of a gravel/tarmac marking (world, on the path) */
+  private surfaceA: Vec2 | null = null;
 
   private pointers = new Map<number, Vec2>();
   private gesture: Gesture | null = null;
@@ -175,6 +186,9 @@ export class App {
       trace: this.mode === 'trace' ? this.trace : [],
       measure: this.mode === 'calibrate' ? this.measure : this.mode === 'straight' && this.straightA ? [this.straightA] : [],
       selected: this.mode === 'corner' && this.corner ? this.corner.corner.indices : [],
+      closed: !this.isOpenDoc(),
+      gravel: this.doc?.gravel ?? [],
+      surfaceMarks: (this.mode === 'gravel' || this.mode === 'tarmac') && this.surfaceA ? [this.surfaceA] : [],
     });
   }
 
@@ -206,16 +220,21 @@ export class App {
       this.history.push(structuredClone(this.doc));
       if (this.history.length > HISTORY_MAX) this.history.shift();
     }
-    this.path = doc ? pathFromControls(doc.controls) : [];
-    this.doc = doc ? syncLength(doc, this.pathUnits()) : null;
+    this.path = doc ? pathFromControls(doc.controls, undefined, !isOpen(doc)) : [];
+    // measure the new doc's own path (open or closed), not the previous doc's
+    this.doc = doc ? syncLength(doc, this.pathUnits(!isOpen(doc))) : null;
     this.hot = -1;
     this.scheduleSave();
     this.updatePanel();
     this.requestDraw();
   }
 
-  private pathUnits(): number {
-    return this.path.length > 2 ? polylineLength(this.path, true) : 0;
+  private isOpenDoc(): boolean {
+    return !!this.doc && isOpen(this.doc);
+  }
+
+  private pathUnits(closed = !this.isOpenDoc()): number {
+    return this.path.length > 2 ? polylineLength(this.path, closed) : 0;
   }
 
   private patch(p: Partial<TrackDoc>, record = true): void {
@@ -228,6 +247,7 @@ export class App {
     if (m !== 'calibrate') this.measure = [];
     this.commitCorner();
     this.straightA = null;
+    this.surfaceA = null;
     this.selectCorner(null);
     const hint = $('hint');
     hint.textContent = HINTS[m];
@@ -328,11 +348,13 @@ export class App {
     doc.name = name.replace(/\.(kml|gpx)$/i, '');
     doc.crs = 'mercator';
     doc.mpu = t.mpu;
+    if (t.open) [doc.discipline, doc.gravel] = ['rally', [[0, 1]]];
     this.setMap(true);
     this.setDoc(doc, false);
+    this.animator.carForDiscipline(disciplineOf(doc));
     this.setMode('edit');
     this.fit();
-    this.toast(`Loaded ${t.controls.length} points · ${t.lengthKm.toFixed(2)} km`);
+    this.toast(t.open ? `Loaded as a rally stage · ${t.lengthKm.toFixed(2)} km` : `Loaded ${t.controls.length} points · ${t.lengthKm.toFixed(2)} km`);
   }
 
   private loadJson(text: string): void {
@@ -345,6 +367,7 @@ export class App {
     }
     this.confidence = null;
     this.setDoc(doc);
+    this.animator.carForDiscipline(disciplineOf(doc));
     this.setMode('edit');
     this.fit();
   }
@@ -377,6 +400,11 @@ export class App {
         const prev = this.doc;
         const doc = newDoc('image', this.imageData!.width, this.imageData!.height, res.controls, prev?.lengthKm ?? 5);
         if (prev) [doc.name, doc.mpu] = [prev.name, prev.mpu]; // same image: keep its scale
+        if (res.open) {
+          [doc.discipline, doc.gravel] = ['rally', [[0, 1]]];
+          this.animator.carForDiscipline('rally');
+          this.toast('Open line: loaded as a rally stage');
+        }
         this.setDoc(doc);
         this.setMode('edit');
         this.fit();
@@ -389,7 +417,7 @@ export class App {
     }, 30);
   }
 
-  private finishTrace(): void {
+  private finishTrace(open = false): void {
     if (this.trace.length < MIN_CONTROLS) return this.toast(`Place at least ${MIN_CONTROLS} points.`);
     let doc: TrackDoc;
     if (this.mapOn) {
@@ -401,6 +429,10 @@ export class App {
       const s = this.space();
       doc = newDoc('manual', s.w, s.h, this.trace.slice(), this.doc?.lengthKm ?? 5);
       doc.mpu = this.doc?.mpu;
+    }
+    if (open) {
+      [doc.discipline, doc.gravel] = ['rally', [[0, 1]]];
+      this.animator.carForDiscipline('rally');
     }
     this.confidence = null;
     this.setDoc(doc);
@@ -512,7 +544,7 @@ export class App {
 
   private nearPath(screen: Vec2, touch: boolean): boolean {
     if (this.path.length < 3) return false;
-    return distanceToPath(this.path, this.view.toWorld(screen)).dist * this.view.scale <= (touch ? 18 : 10);
+    return distanceToPath(this.path, this.view.toWorld(screen), !this.isOpenDoc()).dist * this.view.scale <= (touch ? 18 : 10);
   }
 
   private bindPointer(): void {
@@ -565,7 +597,7 @@ export class App {
         g.moved = true;
         this.cancelLongPress();
         this.doc = { ...this.doc, controls: moveControl(this.doc.controls, g.index, this.view.toWorld(p)) };
-        this.path = pathFromControls(this.doc.controls);
+        this.path = pathFromControls(this.doc.controls, undefined, !isOpen(this.doc));
         this.requestDraw();
       } else if (g.kind === 'pan') {
         if (!g.moved && dist(p, g.start) < TAP_SLOP) return;
@@ -671,24 +703,40 @@ export class App {
       case 'split0':
       case 'split1':
         if (!this.doc || !this.nearPath(screen, true)) return this.toast('Tap on the track line.');
-        this.patch({ sectors: setSector(this.doc.sectors, this.mode === 'split0' ? 0 : 1, fractionAt(this.path, world)) });
+        this.patch({ sectors: setSector(this.doc.sectors, this.mode === 'split0' ? 0 : 1, fractionAt(this.path, world, !this.isOpenDoc())) });
         return this.setMode('edit');
+      case 'gravel':
+      case 'tarmac':
+        return this.surfaceTap(screen, world);
       case 'straight':
         return this.straightTap(screen, world, touch);
       case 'corner':
         return this.cornerTap(screen, world);
       case 'edit':
         if (this.doc && this.hitControl(screen, touch) < 0 && this.nearPath(screen, touch)) {
-          this.patch({ controls: insertControl(this.doc.controls, world).controls });
+          this.patch({ controls: insertControl(this.doc.controls, world, !isOpen(this.doc)).controls });
         }
     }
+  }
+
+  private surfaceTap(screen: Vec2, world: Vec2): void {
+    if (!this.doc || !this.nearPath(screen, true)) return this.toast('Tap on the track line.');
+    if (!this.surfaceA) {
+      this.surfaceA = world;
+      return this.requestDraw();
+    }
+    const closed = !this.isOpenDoc();
+    const fa = fractionAt(this.path, this.surfaceA, closed), fb = fractionAt(this.path, world, closed);
+    const gravel = this.doc.gravel ?? [];
+    this.patch({ gravel: this.mode === 'gravel' ? addRange(gravel, fa, fb) : removeRange(gravel, fa, fb) });
+    this.setMode('edit');
   }
 
   private straightTap(screen: Vec2, world: Vec2, touch: boolean): void {
     if (!this.doc || !this.nearPath(screen, true)) return this.toast('Tap on the track line.');
     const ctrl = this.doc.controls;
     const ci = nearestIndex(ctrl, world, (touch ? 20 : 11) / this.view.scale);
-    const p = ci >= 0 ? ctrl[ci] : this.path[distanceToPath(this.path, world).index];
+    const p = ci >= 0 ? ctrl[ci] : this.path[distanceToPath(this.path, world, !this.isOpenDoc()).index];
     if (!this.straightA) {
       this.straightA = { ...p };
       $('hint').textContent = 'TAP THE OTHER END OF THE STRAIGHT';
@@ -707,7 +755,7 @@ export class App {
     if (!this.doc || !this.nearPath(screen, true)) return this.toast('Tap on the track line.');
     this.commitCorner();
     const ctrl = this.doc.controls;
-    const near = distanceToPath(this.path, world).index;
+    const near = distanceToPath(this.path, world, !this.isOpenDoc()).index;
     const apex = apexIndex(curvatureClosed(this.path), near, Math.round(this.path.length / 30));
     const corner = findCorner(ctrl, nearestIndex(ctrl, this.path[apex]));
     if (!corner) return this.toast('No corner there: tap where the track turns.');
@@ -731,7 +779,7 @@ export class App {
     c.before ??= structuredClone(this.doc);
     const s = tightnessToScale(t);
     this.doc = { ...this.doc, controls: scaleCorner(c.base, c.corner, s) };
-    this.path = pathFromControls(this.doc.controls);
+    this.path = pathFromControls(this.doc.controls, undefined, !isOpen(this.doc));
     $('corner-out').textContent = `${Math.round(cornerScale(c.corner, s) * 100)}% radius`;
     this.requestDraw();
   }
@@ -837,6 +885,7 @@ export class App {
       this.requestDraw();
     });
     on('btn-trace-done', () => this.finishTrace());
+    on('btn-trace-stage', () => this.finishTrace(true));
     on('btn-trace-cancel', () => this.setMode('edit'));
 
     const tol = $<HTMLInputElement>('tol');
@@ -844,11 +893,28 @@ export class App {
     tol.addEventListener('change', () => this.detect());
 
     on('btn-reverse', () => {
-      if (this.doc) this.patch({ controls: reverseControls(this.doc.controls), sectors: reverseSectors(this.doc.sectors) });
+      if (this.doc) {
+        this.patch({
+          controls: reverseControls(this.doc.controls, !isOpen(this.doc)),
+          sectors: reverseSectors(this.doc.sectors),
+          gravel: reverseRanges(this.doc.gravel ?? []),
+        });
+      }
     });
     on('btn-start', toggle('start'));
     on('btn-s2', toggle('split0'));
     on('btn-s3', toggle('split1'));
+    document.querySelectorAll<HTMLButtonElement>('[data-discipline]').forEach((b) =>
+      b.addEventListener('click', () => {
+        const d = b.dataset.discipline as Discipline;
+        if (!this.doc || !DISCIPLINES.includes(d) || disciplineOf(this.doc) === d) return;
+        this.setDoc(setDiscipline(this.doc, d));
+        this.animator.carForDiscipline(d);
+        this.setMode('edit');
+      }),
+    );
+    on('btn-gravel', toggle('gravel'));
+    on('btn-tarmac', toggle('tarmac'));
     on('btn-straight', toggle('straight'));
     on('btn-corner', toggle('corner'));
     on('corner-done', () => this.setMode('edit'));
@@ -933,8 +999,21 @@ export class App {
       'btn-calibrate': this.mode === 'calibrate',
       'btn-straight': this.mode === 'straight',
       'btn-corner': this.mode === 'corner',
+      'btn-gravel': this.mode === 'gravel',
+      'btn-tarmac': this.mode === 'tarmac',
     };
     for (const [id, on] of Object.entries(active)) $(id).classList.toggle('active', on);
+    const disc = d ? disciplineOf(d) : 'formula';
+    const rally = disc === 'rally';
+    document.querySelectorAll<HTMLButtonElement>('[data-discipline]').forEach((b) => b.classList.toggle('active', b.dataset.discipline === disc));
+    $('discipline-help').textContent = DISCIPLINE_HELP[disc];
+    $('surface-tools').hidden = disc === 'formula';
+    $('btn-start').hidden = rally;
+    for (const id of ['btn-straight', 'btn-corner']) {
+      const b = $<HTMLButtonElement>(id);
+      b.disabled = rally;
+      b.title = rally ? 'Not available on rally stages yet' : '';
+    }
     $('calib-tools').hidden = this.mode !== 'calibrate';
     $('corner-tools').hidden = this.mode !== 'corner';
     $('btn-calibrate').hidden = d?.crs === 'mercator'; // map coordinates already carry the scale
@@ -971,7 +1050,7 @@ export class App {
         : `<span class="warn">Scale not set: calibrate or type the lap length</span>`;
       $('stats').innerHTML =
         `<span><b>${d.controls.length}</b> points</span><span><b>${Math.round(px)}</b> ${unit} lap</span>${scale}` +
-        `<span>S1 <b>${Math.round(d.sectors[0] * 100)}%</b> · S2 <b>${Math.round((d.sectors[1] - d.sectors[0]) * 100)}%</b> · S3 <b>${Math.round((1 - d.sectors[1]) * 100)}%</b></span>`;
+        `${disc === 'formula' ? '' : `<span>Gravel <b>${Math.round((d.gravel ?? []).reduce((t, [a, b]) => t + (b - a), 0) * 100)}%</b></span>`}<span>S1 <b>${Math.round(d.sectors[0] * 100)}%</b> · S2 <b>${Math.round((d.sectors[1] - d.sectors[0]) * 100)}%</b> · S3 <b>${Math.round((1 - d.sectors[1]) * 100)}%</b></span>`;
       $('meta').textContent = `${d.name.toUpperCase()} · ${d.lengthKm.toFixed(3)} KM`;
     } else {
       $('meta').textContent = '';

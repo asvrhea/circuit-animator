@@ -8,6 +8,7 @@ export const THEME = {
   casing: 'rgba(0,0,0,0.75)',
   /** sector 1..3 */
   sectors: ['#ff2a3c', '#ffc400', '#25d0ff'] as const,
+  gravel: '#8a6d45',
   control: '#ffffff',
   controlEdge: '#0b0d10',
   font: '"Barlow Condensed", "Roboto Condensed", "Arial Narrow", sans-serif',
