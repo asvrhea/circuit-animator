@@ -22,3 +22,26 @@ export function resampleClosed(pts: Vec2[], n: number): Vec2[] {
   }
   return out;
 }
+
+/** Resample an open polyline to `n` points evenly spaced by arc length, first and last kept. */
+export function resampleOpen(pts: Vec2[], n: number): Vec2[] {
+  const m = pts.length;
+  if (m === 0 || n <= 0) return [];
+  if (m === 1 || n === 1) return Array.from({ length: n }, () => ({ ...pts[0] }));
+
+  const cum = new Float64Array(m);
+  for (let i = 1; i < m; i++) cum[i] = cum[i - 1] + dist(pts[i - 1], pts[i]);
+  const total = cum[m - 1];
+  if (total === 0) return Array.from({ length: n }, () => ({ ...pts[0] }));
+
+  const out: Vec2[] = [];
+  let seg = 0;
+  for (let k = 0; k < n; k++) {
+    const target = (k * total) / (n - 1);
+    while (seg < m - 2 && cum[seg + 1] < target) seg++;
+    const segLen = cum[seg + 1] - cum[seg];
+    const t = segLen > 0 ? Math.min(1, (target - cum[seg]) / segLen) : 0;
+    out.push(lerp(pts[seg], pts[seg + 1], t));
+  }
+  return out;
+}

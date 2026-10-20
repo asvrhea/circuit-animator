@@ -1,6 +1,15 @@
 import type { Vec2 } from '../geom/vec2';
+import { normalizeRanges, type Ranges } from '../sim/surface';
 
 export type TrackSource = 'image' | 'geo' | 'manual' | 'map';
+
+/**
+ * formula: closed circuit, tarmac. rally: point-to-point stage (controls[0] =
+ * start, last = finish), gravel by default. mix: closed circuit with tarmac
+ * and gravel stretches (rallycross style).
+ */
+export type Discipline = 'formula' | 'rally' | 'mix';
+export const DISCIPLINES: Discipline[] = ['formula', 'rally', 'mix'];
 
 /** Everything needed to rebuild a track. Coordinates live in a width x height space. */
 export interface TrackDoc {
@@ -21,6 +30,29 @@ export interface TrackDoc {
   mpu?: number;
   /** 'mercator': coordinates are Web Mercator metres (x east, y = −north), so a basemap can be drawn. */
   crs?: 'mercator';
+  /** missing = 'formula' (files saved before disciplines existed) */
+  discipline?: Discipline;
+  /** gravel stretches as [from, to] fractions of the track length; the rest is tarmac */
+  gravel?: Ranges;
+}
+
+export const disciplineOf = (doc: TrackDoc): Discipline => doc.discipline ?? 'formula';
+/** Rally stages are open paths; circuits are closed loops. */
+export const isOpen = (doc: TrackDoc): boolean => disciplineOf(doc) === 'rally';
+
+/**
+ * Switch discipline. Controls stay where they are: a circuit opened into a
+ * stage runs from its start/finish point round to the last control, and a
+ * stage closed into a circuit joins its finish back to the start.
+ */
+export function setDiscipline(doc: TrackDoc, d: Discipline): TrackDoc {
+  const from = disciplineOf(doc);
+  if (from === d) return doc;
+  let gravel = doc.gravel ?? [];
+  if (d === 'formula') gravel = [];
+  else if (d === 'rally' && from === 'formula') gravel = [[0, 1]]; // a stage starts as all gravel
+  else if (d === 'mix' && from === 'rally' && gravel.length === 1 && gravel[0][0] === 0 && gravel[0][1] === 1) gravel = [];
+  return { ...doc, discipline: d, gravel };
 }
 
 export const DEFAULT_SECTORS: [number, number] = [1 / 3, 2 / 3];
@@ -92,5 +124,10 @@ export function parseDoc(text: string): TrackDoc {
   };
   if (isNum(o.mpu) && o.mpu > 0) doc.mpu = o.mpu;
   if (o.crs === 'mercator') doc.crs = 'mercator';
+  if (o.discipline === 'rally' || o.discipline === 'mix' || o.discipline === 'formula') doc.discipline = o.discipline;
+  if (Array.isArray(o.gravel)) {
+    const ranges = o.gravel.filter((r): r is [number, number] => Array.isArray(r) && isNum(r[0]) && isNum(r[1]));
+    doc.gravel = normalizeRanges(ranges);
+  }
   return doc;
 }

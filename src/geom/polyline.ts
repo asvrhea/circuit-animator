@@ -34,3 +34,18 @@ export function smoothClosed(pts: Vec2[], r: number): Vec2[] {
   }
   return out;
 }
+
+/** Moving-average smoothing on an open polyline; the window shrinks at the ends so they stay put. */
+export function smoothOpen(pts: Vec2[], r: number): Vec2[] {
+  const n = pts.length;
+  if (r <= 0 || n < 3) return pts.map((p) => ({ ...p }));
+  return pts.map((_, i) => {
+    const k = Math.min(r, i, n - 1 - i);
+    let sx = 0, sy = 0;
+    for (let j = -k; j <= k; j++) {
+      sx += pts[i + j].x;
+      sy += pts[i + j].y;
+    }
+    return { x: sx / (2 * k + 1), y: sy / (2 * k + 1) };
+  });
+}

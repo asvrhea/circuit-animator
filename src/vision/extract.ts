@@ -1,5 +1,5 @@
-import { smoothClosed } from '../geom/polyline';
-import { rdpClosed } from '../geom/simplify';
+import { smoothClosed, smoothOpen } from '../geom/polyline';
+import { rdp, rdpClosed } from '../geom/simplify';
 import { DEFAULT_SAMPLES, pathFromControls } from '../geom/track';
 import type { Vec2 } from '../geom/vec2';
 import { colorMask, type HsvTolerance } from './color';
@@ -35,7 +35,12 @@ export interface Confidence {
   hints: string[];
 }
 
+/** An open line whose ends are further apart than this share of its length is a rally stage. */
+const OPEN_STAGE_GAP = 0.08;
+
 export interface ExtractResult {
+  /** the line has two clear ends: treat it as a point-to-point stage (controls[0] = start) */
+  open: boolean;
   /** editable control points (image px) */
   controls: Vec2[];
   /** smooth, evenly resampled closed path (image px) */
@@ -75,9 +80,10 @@ export function extractTrack(img: RGBAImage, opts: ExtractOptions): ExtractResul
   if (!best) throw new ExtractError('Could not trace a loop from the picked colour. Try manual trace.');
   const { comp, skeleton, loop } = best;
 
-  const smoothed = smoothClosed(loop.points, 2);
-  const controls = rdpClosed(smoothed, eps);
-  const path = pathFromControls(controls, samples);
+  // A clearly open line is a stage; a small leftover gap is a circuit with a break, joined up.
+  const open = !loop.closed && loop.gap / loop.length > OPEN_STAGE_GAP;
+  const controls = open ? rdp(smoothOpen(loop.points, 2), eps) : rdpClosed(smoothClosed(loop.points, 2), eps);
+  const path = pathFromControls(controls, samples, !open);
 
   // Of the matching colour around the track (its bbox + margin), how much is the track itself.
   const { width: w } = raw;
@@ -96,10 +102,15 @@ export function extractTrack(img: RGBAImage, opts: ExtractOptions): ExtractResul
       rawInComp += raw.data[p] & comp.mask.data[p];
     }
 
+  const confidence = scoreConfidence(
+    rawInComp / Math.max(1, rawNear), loop.loopPixels / Math.max(1, loop.skeletonPixels), loop.closed || open ? 0 : loop.gap / loop.length,
+  );
+  if (open) confidence.hints.push('The line has two ends, so it was read as a point-to-point rally stage.');
   return {
+    open,
     controls,
     path,
-    confidence: scoreConfidence(rawInComp / Math.max(1, rawNear),loop.loopPixels / Math.max(1, loop.skeletonPixels), loop.closed ? 0 : loop.gap / loop.length),
+    confidence,
     mask: comp.mask,
     skeleton,
   };

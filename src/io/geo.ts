@@ -1,5 +1,5 @@
 import { haversine, projectScreen, type LonLat } from '../geom/projection';
-import { rdpClosed } from '../geom/simplify';
+import { rdp, rdpClosed } from '../geom/simplify';
 import type { Vec2 } from '../geom/vec2';
 
 /**
@@ -54,19 +54,30 @@ export interface GeoTrack {
   /** bounding box size in map units */
   width: number;
   height: number;
+  /** true when the line's ends are far apart: a point-to-point rally stage */
+  open: boolean;
 }
+
+/** Ends further apart than this share of the route (and 50 m) make it a point-to-point stage. */
+const OPEN_GAP_SHARE = 0.05;
 
 /**
  * Project lon/lat into map units, drop a duplicated closing point, and thin
- * to at most `maxControls` editable points.
+ * to at most `maxControls` editable points. A line whose ends are far apart
+ * is kept open (rally stage) instead of being closed into a circuit.
  */
 export function geoToTrack(pts: LonLat[], maxControls = 120): GeoTrack {
   let ll = pts.slice();
-  if (ll.length > 2 && haversine(ll[0], ll[ll.length - 1]) < 1) ll = ll.slice(0, -1);
+  // a line that comes back to its first point is a circuit, whatever its shape
+  const returnsToStart = ll.length > 2 && haversine(ll[0], ll[ll.length - 1]) < 1;
+  if (returnsToStart) ll = ll.slice(0, -1);
   if (ll.length < 3) throw new Error('The file needs at least 3 points on one line.');
 
-  let lengthM = 0;
-  for (let i = 0; i < ll.length; i++) lengthM += haversine(ll[i], ll[(i + 1) % ll.length]);
+  let openM = 0;
+  for (let i = 0; i + 1 < ll.length; i++) openM += haversine(ll[i], ll[i + 1]);
+  const gapM = haversine(ll[0], ll[ll.length - 1]);
+  const open = !returnsToStart && gapM > Math.max(50, OPEN_GAP_SHARE * openM);
+  const lengthM = open ? openM : openM + gapM;
 
   const units = projectScreen(ll);
   const xs = units.map((p) => p.x), ys = units.map((p) => p.y);
@@ -76,7 +87,8 @@ export function geoToTrack(pts: LonLat[], maxControls = 120): GeoTrack {
 
   // ~2 m: the spline through the kept points stays visually exact, and dense
   // GPS sampling becomes a comfortable number of editable points.
-  let controls = rdpClosed(units, 2 / mpu);
-  for (let eps = 3 / mpu; controls.length > maxControls; eps *= 1.6) controls = rdpClosed(units, eps);
-  return { controls, lengthKm: lengthM / 1000, mpu, width: w || 1, height: h || 1 };
+  const simplify = open ? rdp : rdpClosed;
+  let controls = simplify(units, 2 / mpu);
+  for (let eps = 3 / mpu; controls.length > maxControls; eps *= 1.6) controls = simplify(units, eps);
+  return { controls, lengthKm: lengthM / 1000, mpu, width: w || 1, height: h || 1, open };
 }
