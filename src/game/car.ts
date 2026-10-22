@@ -41,9 +41,8 @@ export interface Env {
 
 export const NO_CONTROLS: Controls = { throttle: 0, brake: 0, steer: 0 };
 
-/** Collision circle radius and visual size, m. */
-export const CAR_RADIUS = 2.2;
-export const CAR_LENGTH = 5;
+/** Visual size, m (collision circles live in collide.ts). */
+export const CAR_LENGTH = 5.6;
 export const CAR_WIDTH = 2;
 
 const WHEELBASE = 3.2;
@@ -64,9 +63,9 @@ export function stepCar(c: CarState, ctl: Controls, car: CarParams, env: Env, dt
   let vf = c.vx * fx + c.vy * fy;
   let vl = c.vx * lx + c.vy * ly;
 
-  // keyboard steering ramps in quickly and returns to centre faster
+  // steering is near-instant: full lock in 0.1 s, back to centre in 0.07 s (only there to take the edge off a key press)
   const want = clamp(ctl.steer, -1, 1);
-  const rate = (Math.abs(want) > Math.abs(c.steer) && want * c.steer >= 0 ? 4.5 : 7) * dt;
+  const rate = (Math.abs(want) > Math.abs(c.steer) && want * c.steer >= 0 ? 10 : 14) * dt;
   c.steer += clamp(want - c.steer, -rate, rate);
 
   const latLimit = car.aLat * env.lat;
@@ -106,14 +105,15 @@ export function stepCar(c: CarState, ctl: Controls, car: CarParams, env: Env, dt
 
   // ---- yaw
   const speed = Math.abs(vf);
-  const wGeom = (speed * MAX_STEER_TAN) / WHEELBASE;
-  const wGrip = (1.15 * latBudget) / Math.max(speed, 1);
+  // a little pivot authority with the throttle down, so a car crawling against a wall can still turn away from it
+  const wGeom = (Math.max(speed, 4 * ctl.throttle) * MAX_STEER_TAN) / WHEELBASE;
+  const wGrip = (1.06 * latBudget) / Math.max(speed, 1);
   const wTarget = c.steer * Math.min(wGeom, wGrip) * (vf >= 0 ? 1 : -1);
-  c.yaw += clamp(wTarget - c.yaw, -14 * dt, 14 * dt);
+  c.yaw += clamp(wTarget - c.yaw, -80 * dt, 80 * dt);
   c.heading += c.yaw * dt;
 
   // ---- tyres pull the sideways velocity back, up to the grip limit
-  const dv = clamp(-vl * Math.min(1, 12 * dt), -latBudget * dt, latBudget * dt);
+  const dv = clamp(-vl * Math.min(1, 40 * dt), -latBudget * dt, latBudget * dt);
   vl += dv;
 
   // rebuild the world velocity in the (pre-rotation) body frame; the heading change shows up as slip next step

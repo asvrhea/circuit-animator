@@ -96,7 +96,7 @@ describe('car physics', () => {
     };
     const slipLoose = turn(loose, 0.3);
     turn(grippy, 1);
-    expect(slipLoose).toBeGreaterThan(0.5); // sideways speed: sliding
+    expect(slipLoose).toBeGreaterThan(0.3); // sideways speed: sliding
     expect(loose.heading).toBeLessThan(grippy.heading); // and turning less
   });
   it('is much slower off the track', () => {
@@ -117,8 +117,14 @@ describe('collisions', () => {
   it('separates overlapping circles and swaps closing speed', () => {
     const a = { x: 0, y: 0, vx: 10, vy: 0 }, b = { x: 3, y: 0, vx: 0, vy: 0 };
     expect(collide(a, b)).toBe(true);
-    expect(Math.hypot(b.x - a.x, b.y - a.y)).toBeGreaterThanOrEqual(4.4 - 1e-9);
+    expect(b.x - a.x).toBeGreaterThanOrEqual(5 - 1e-6); // nose-to-tail: about one car length
     expect(b.vx).toBeGreaterThan(a.vx);
+  });
+  it('lets cars run side by side two metres apart but not closer', () => {
+    expect(collide({ x: 0, y: 0, vx: 0, vy: 0 }, { x: 0, y: 2.5, vx: 0, vy: 0 })).toBe(false);
+    const a = { x: 0, y: 0, vx: 0, vy: 0 }, b = { x: 0, y: 1.5, vx: 0, vy: 0 };
+    expect(collide(a, b)).toBe(true);
+    expect(b.y - a.y).toBeGreaterThanOrEqual(2.1 - 1e-6);
   });
   it('ignores cars that are apart', () => {
     expect(collide({ x: 0, y: 0, vx: 0, vy: 0 }, { x: 10, y: 0, vx: 0, vy: 0 })).toBe(false);
@@ -202,7 +208,7 @@ describe('circuit race', () => {
           worst = Math.min(worst, Math.hypot(A.x - B.x, A.y - B.y));
         }
     }
-    expect(worst).toBeGreaterThan(3.5); // circles of 2.2 m may touch but never sink into each other
+    expect(worst).toBeGreaterThan(1.9); // side by side at most; never sunk into each other
   });
 
   it('a pilot can drive a lap on the road', () => {

@@ -1,10 +1,13 @@
-import { CAR_LENGTH, CAR_WIDTH, forwardSpeed } from '../game/car';
+import { forwardSpeed } from '../game/car';
 import { gapBetween, lightsLit, type Game, type Racer } from '../game/race';
+import { buildPaceNotes, noteLabel, upcomingNotes, type PaceNote } from '../game/pacenotes';
 import { HALF_WIDTH } from '../game/track';
+import { tilesFor, zoomForScale } from '../geom/tiles';
 import { normalize, sub, type Vec2 } from '../geom/vec2';
 import { formatLapTime, type Race, type RaceState } from '../sim/race';
 import { AnimRenderer, type ThemeMode } from './anim';
 import { Camera } from './camera';
+import { drawOpenWheelCar, SPRITE_LENGTH } from './carSprite';
 import { drawHud } from './hud';
 import { THEME } from './theme';
 import { OSM_ATTRIBUTION, type TileLayer } from './tiles';
@@ -24,6 +27,8 @@ export interface GameView {
   lengthKm: number;
   /** leave the bottom-left free for touch buttons */
   touch: boolean;
+  /** pace-note callout */
+  notes: boolean;
 }
 
 const font = (weight: number, px: number, italic = false) => `${italic ? 'italic ' : ''}${weight} ${px}px ${THEME.font}`;
@@ -39,6 +44,9 @@ export class GameRenderer {
   private readonly anim: AnimRenderer;
   private readonly units: Vec2[];
   private heading = 0;
+  private tileZ = -1;
+  private tileRef = 0;
+  readonly notes: PaceNote[];
   private spanM = 120;
 
   constructor(
@@ -47,6 +55,7 @@ export class GameRenderer {
   ) {
     const t = game.track;
     this.units = t.path.map((p) => ({ x: p.x / t.mpu, y: p.y / t.mpu }));
+    this.notes = buildPaceNotes(t);
     // the anim renderer only lends its backdrop helpers, so a path-shaped stub is enough
     const stub = { path: this.units, closed: t.closed, mpu: t.mpu, gravel: t.gravel, sectors: t.sectors } as unknown as Race;
     this.anim = new AnimRenderer(stub, {
@@ -67,12 +76,12 @@ export class GameRenderer {
     const headUp = this.view.orientation === 'heading';
     let dh = p.car.heading - this.heading;
     dh = Math.atan2(Math.sin(dh), Math.cos(dh));
-    this.heading = snap ? p.car.heading : this.heading + dh * (dt <= 0 ? 1 : 1 - Math.exp(-dt / 0.1));
+    this.heading = snap ? p.car.heading : this.heading + dh * (dt <= 0 ? 1 : 1 - Math.exp(-dt / 0.035));
     this.cam.ax = w / 2;
     this.cam.ay = headUp ? h * 0.62 : h / 2;
     const target = { cx: p.car.x / mpu, cy: p.car.y / mpu, scale: pxPerM * mpu, rot: headUp ? -Math.PI / 2 - this.heading : 0 };
     if (snap || dt <= 0) this.cam.set(target);
-    else this.cam.smoothTo(target, dt, 0.05, 0.3, 0.12);
+    else this.cam.smoothTo(target, dt, 0, 0.3, 0.02);
     const ppm = this.cam.scale / mpu;
 
     // ---- backdrop
@@ -84,9 +93,8 @@ export class GameRenderer {
     const useImage = this.view.theme === 'screenshot' && (!!this.view.image || useTiles);
     this.cam.apply(ctx, dpr);
     if (useTiles) {
-      ctx.filter = 'grayscale(0.7) brightness(0.8) contrast(1.05)';
-      this.view.tiles!.draw(ctx, this.cam.visibleRect(w, h), this.cam.scale, dpr);
-      ctx.filter = 'none';
+      // one locked zoom for the whole race; no canvas filter (it re-runs on every tile every frame)
+      this.view.tiles!.draw(ctx, this.cam.visibleRect(w, h), this.cam.scale, dpr, this.lockTileZoom(w, h, dpr));
     } else if (useImage) {
       ctx.imageSmoothingQuality = 'high';
       ctx.drawImage(this.view.image!, 0, 0, this.view.imageW, this.view.imageH);
@@ -113,6 +121,28 @@ export class GameRenderer {
       ctx.fillText(OSM_ATTRIBUTION, w - 6 * u, h - 3 * u);
     }
     ctx.restore();
+  }
+
+  /**
+   * One tile zoom for the whole race, matched to a typical camera span. Only
+   * a big resize re-picks it, and then the tiles around the whole track are
+   * requested up front so nothing is fetched or decoded mid-corner.
+   */
+  private lockTileZoom(w: number, h: number, dpr: number): number {
+    const mpu = this.game.track.mpu;
+    const nominal = (Math.min(w, h * 1.1) / 90) * mpu; // css px per unit at a 90 m span
+    if (this.tileZ >= 0 && nominal / this.tileRef > 0.6 && nominal / this.tileRef < 1.7) return this.tileZ;
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    for (const q of this.units) [x0, y0, x1, y1] = [Math.min(x0, q.x), Math.min(y0, q.y), Math.max(x1, q.x), Math.max(y1, q.y)];
+    const pad = 150 / mpu;
+    const rect = { x: x0 - pad, y: y0 - pad, w: x1 - x0 + 2 * pad, h: y1 - y0 + 2 * pad };
+    let z = zoomForScale(nominal, dpr);
+    while (z > 13 && tilesFor(rect, z, Infinity).length > 150) z--; // stay polite to the tile server
+    const count = this.view.tiles!.prefetch(rect, z);
+    this.view.tiles!.reserve(count * 1.3 + 60);
+    this.tileZ = z;
+    this.tileRef = nominal;
+    return z;
   }
 
   // ------------------------------------------------------------ road
@@ -171,33 +201,12 @@ export class GameRenderer {
   private drawCar(ctx: Ctx, r: Racer, ppm: number, u: number): void {
     const mpu = this.game.track.mpu;
     const s = this.cam.toScreen({ x: r.car.x / mpu, y: r.car.y / mpu });
-    const L = Math.max(11 * u, CAR_LENGTH * ppm), Wd = Math.max(5 * u, CAR_WIDTH * ppm);
-    const heading = r.car.heading + this.cam.rot;
+    // real size, but never smaller than a readable minimum
+    const px = Math.max(ppm, (15 * u) / SPRITE_LENGTH);
     ctx.save();
     ctx.translate(s.x, s.y);
-    ctx.rotate(heading);
-    if (r.isPlayer) {
-      ctx.shadowColor = 'rgba(255,255,255,0.7)';
-      ctx.shadowBlur = L * 0.6;
-    }
-    // body: wedge-ish nose
-    ctx.beginPath();
-    ctx.moveTo(L * 0.5, 0);
-    ctx.lineTo(L * 0.2, -Wd * 0.5);
-    ctx.lineTo(-L * 0.5, -Wd * 0.5);
-    ctx.lineTo(-L * 0.5, Wd * 0.5);
-    ctx.lineTo(L * 0.2, Wd * 0.5);
-    ctx.closePath();
-    ctx.fillStyle = r.driver.color;
-    ctx.fill();
-    ctx.shadowBlur = 0;
-    ctx.lineWidth = Math.max(1, Wd * 0.14);
-    ctx.strokeStyle = r.isPlayer ? '#fff' : 'rgba(0,0,0,0.75)';
-    ctx.lineJoin = 'round';
-    ctx.stroke();
-    // cockpit
-    ctx.fillStyle = 'rgba(0,0,0,0.65)';
-    ctx.fillRect(-L * 0.12, -Wd * 0.2, L * 0.2, Wd * 0.4);
+    ctx.rotate(r.car.heading + this.cam.rot);
+    drawOpenWheelCar(ctx, px, r.driver.color, r.isPlayer);
     ctx.restore();
     if (!r.isPlayer) {
       ctx.font = font(700, 11 * u);
@@ -205,9 +214,10 @@ export class GameRenderer {
       ctx.textBaseline = 'bottom';
       ctx.lineWidth = 3 * u;
       ctx.strokeStyle = 'rgba(0,0,0,0.8)';
-      ctx.strokeText(r.driver.code, s.x, s.y - L * 0.55);
+      const y = s.y - Math.max(1.4 * px * 2, 12 * u);
+      ctx.strokeText(r.driver.code, s.x, y);
       ctx.fillStyle = '#fff';
-      ctx.fillText(r.driver.code, s.x, s.y - L * 0.55);
+      ctx.fillText(r.driver.code, s.x, y);
     }
   }
 
@@ -235,6 +245,8 @@ export class GameRenderer {
     const raceLike = { closed, laps: g.laps, gravel: t.gravel, topSpeed: g.setup.car.vMax, sectors: t.sectors } as unknown as Race;
     drawHud(ctx, w, h - (this.view.touch ? 118 : 0), u, raceLike, stateLike, { name: this.view.name, lengthKm: this.view.lengthKm });
 
+    if (this.view.notes && g.raceTime >= 0 && !p.finished) this.drawNotes(ctx, w, u);
+
     // position badge + standings
     if (closed) this.drawStandings(ctx, w, u);
 
@@ -254,6 +266,59 @@ export class GameRenderer {
       ctx.strokeText(msg, w / 2, h * 0.2);
       ctx.fillStyle = THEME.accent;
       ctx.fillText(msg, w / 2, h * 0.2);
+    }
+  }
+
+  private drawNotes(ctx: Ctx, w: number, u: number): void {
+    const g = this.game;
+    const ahead = upcomingNotes(g.track, this.notes, g.player.prevS, 450, 2);
+    if (!ahead.length) return;
+    const bw = Math.min(w - 32 * u, 230 * u), bh = 54 * u;
+    const x = (w - bw) / 2, y = 56 * u;
+    const first = ahead[0];
+    const n = first.note;
+    const urgent = first.dist < 120;
+    ctx.fillStyle = PANEL;
+    ctx.fillRect(x, y, bw, bh);
+    ctx.fillStyle = urgent ? THEME.accent : THEME.sectors[1];
+    ctx.fillRect(x, y, 5 * u, bh);
+    // arrow: up the road, then bending away by how tight the corner is
+    const cx = x + 30 * u, cy = y + bh / 2 + 6 * u;
+    const dirv = n.dir === 'left' ? -1 : 1;
+    const ang = ([150, 115, 90, 62, 40, 22][n.severity - 1] * Math.PI) / 180;
+    const fx = dirv * Math.sin(ang), fy = -Math.cos(ang);
+    const kx = cx, ky = cy - 8 * u; // the knee
+    const ex = kx + fx * 17 * u, ey = ky + fy * 17 * u;
+    ctx.strokeStyle = '#fff';
+    ctx.lineWidth = 5 * u;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    ctx.beginPath();
+    ctx.moveTo(cx, cy + 14 * u);
+    ctx.lineTo(kx, ky);
+    ctx.lineTo(ex, ey);
+    ctx.stroke();
+    ctx.beginPath();
+    for (const side of [-1, 1]) {
+      const a = Math.atan2(fy, fx) + Math.PI + side * 0.55;
+      ctx.moveTo(ex, ey);
+      ctx.lineTo(ex + Math.cos(a) * 9 * u, ey + Math.sin(a) * 9 * u);
+    }
+    ctx.stroke();
+    ctx.textBaseline = 'middle';
+    ctx.textAlign = 'left';
+    ctx.fillStyle = '#fff';
+    ctx.font = font(800, 26 * u, true);
+    ctx.fillText(noteLabel(n), x + 64 * u, y + 20 * u);
+    ctx.fillStyle = urgent ? THEME.accent : THEME.text;
+    ctx.font = font(700, 20 * u);
+    ctx.fillText(`${Math.max(0, Math.round(first.dist / 10) * 10)} m`, x + 64 * u, y + 42 * u);
+    if (ahead[1]) {
+      ctx.textAlign = 'right';
+      ctx.fillStyle = THEME.muted;
+      ctx.font = font(600, 13 * u);
+      ctx.fillText(`then ${noteLabel(ahead[1].note)}`, x + bw - 8 * u, y + 20 * u);
+      ctx.fillText(`${Math.round(ahead[1].dist / 10) * 10} m`, x + bw - 8 * u, y + 42 * u);
     }
   }
 

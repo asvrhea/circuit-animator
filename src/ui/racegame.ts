@@ -1,7 +1,8 @@
 import { NO_CONTROLS, type Controls } from '../game/car';
 import {
-  createGame, finalizeResults, MAX_OPPONENTS, MIN_OPPONENTS, stepGame, type Difficulty, type Game, type Results,
+  advance, createGame, finalizeResults, MAX_OPPONENTS, MIN_OPPONENTS, type Difficulty, type Game, type Results,
 } from '../game/race';
+import { upcomingNotes } from '../game/pacenotes';
 import { buildGameTrack } from '../game/track';
 import { pathFromControls } from '../geom/track';
 import { disciplineOf, isOpen } from '../io/trackFile';
@@ -18,11 +19,13 @@ export interface RaceSettings {
   laps: number;
   rivals: number;
   difficulty: Difficulty;
+  /** pace notes: off, on-screen callout, or callout plus a beep */
+  notes: 'off' | 'visual' | 'beep';
 }
 
 const KEY = 'circuit-animator:race';
 const SAMPLES = 1000;
-const DEFAULTS: RaceSettings = { orientation: 'heading', theme: 'broadcast', laps: 3, rivals: 7, difficulty: 'normal' };
+const DEFAULTS: RaceSettings = { orientation: 'heading', theme: 'broadcast', laps: 3, rivals: 7, difficulty: 'normal', notes: 'visual' };
 const RESULTS_DELAY = 3;
 
 const $ = <T extends HTMLElement>(id: string): T => document.getElementById(id) as T;
@@ -51,6 +54,10 @@ export class RaceGame {
   private readonly holds = new Map<string, Set<number>>();
   private readonly touch = isTouchDevice();
   private ctl: Controls = NO_CONTROLS;
+  /** physics time not yet consumed (fixed-step accumulator) */
+  private acc = 0;
+  private audio: AudioContext | null = null;
+  private announced = -1;
 
   constructor(
     private readonly canvas: HTMLCanvasElement,
@@ -66,6 +73,7 @@ export class RaceGame {
     if (s.orientation !== 'heading' && s.orientation !== 'north') s.orientation = DEFAULTS.orientation;
     if (s.theme !== 'broadcast' && s.theme !== 'screenshot') s.theme = DEFAULTS.theme;
     if (!['easy', 'normal', 'hard'].includes(s.difficulty)) s.difficulty = DEFAULTS.difficulty;
+    if (!['off', 'visual', 'beep'].includes(s.notes)) s.notes = DEFAULTS.notes;
     s.laps = Math.max(1, Math.min(10, Math.round(Number(s.laps) || DEFAULTS.laps)));
     s.rivals = Math.max(MIN_OPPONENTS, Math.min(MAX_OPPONENTS, Math.round(Number(s.rivals) || DEFAULTS.rivals)));
     this.bindUi();
@@ -120,8 +128,10 @@ export class RaceGame {
     this.renderer = new GameRenderer(this.game, {
       orientation: this.settings.orientation, theme, image, tiles,
       imageW: image?.width ?? doc.width, imageH: image?.height ?? doc.height,
-      name: doc.name, lengthKm: doc.lengthKm, touch: this.touch,
+      name: doc.name, lengthKm: doc.lengthKm, touch: this.touch, notes: this.settings.notes !== 'off',
     });
+    this.acc = 0;
+    this.announced = -1;
     this.redraw(true);
   }
 
@@ -146,7 +156,8 @@ export class RaceGame {
     const dt = Math.min(0.05, Math.max(0, (now - this.last) / 1000));
     this.last = now;
     this.ctl = this.controls();
-    stepGame(this.game, this.ctl, dt);
+    this.acc = advance(this.game, this.ctl, this.acc, dt);
+    this.beepForNotes();
     this.paint(dt);
     const g = this.game;
     if (g.phase === 'finished' && g.playerFinishT !== null && g.raceTime - g.playerFinishT > RESULTS_DELAY) {
@@ -157,6 +168,36 @@ export class RaceGame {
       return;
     }
     this.raf = requestAnimationFrame((t) => this.tick(t));
+  }
+
+  /** One short beep per corner as it comes within about three seconds. */
+  private beepForNotes(): void {
+    const g = this.game, r = this.renderer;
+    if (!g || !r || this.settings.notes !== 'beep' || g.raceTime < 0 || g.player.finished) return;
+    const next = upcomingNotes(g.track, r.notes, g.player.prevS, 450, 1)[0];
+    if (!next) return;
+    const trigger = Math.max(110, Math.abs(g.player.speed) * 3.2);
+    if (next.dist > trigger || next.index === this.announced) return;
+    this.announced = next.index;
+    this.beep(next.note.severity);
+  }
+
+  private beep(severity: number): void {
+    try {
+      this.audio ??= new AudioContext();
+      const a = this.audio;
+      const o = a.createOscillator(), gain = a.createGain();
+      o.type = 'sine';
+      o.frequency.value = 520 + (7 - severity) * 110; // tighter corner, higher pitch
+      gain.gain.setValueAtTime(0.0001, a.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.18, a.currentTime + 0.01);
+      gain.gain.exponentialRampToValueAtTime(0.0001, a.currentTime + (severity <= 2 ? 0.2 : 0.1));
+      o.connect(gain).connect(a.destination);
+      o.start();
+      o.stop(a.currentTime + 0.22);
+    } catch {
+      /* no audio available */
+    }
   }
 
   private paint(dt: number, snap = false): void {
@@ -248,6 +289,7 @@ export class RaceGame {
   // ------------------------------------------------------------ flow
 
   private begin(): void {
+    void this.audio?.resume?.();
     this.build();
     this.setState('running');
   }
@@ -344,6 +386,7 @@ export class RaceGame {
       const src = this.source();
       this.renderer.view.orientation = this.settings.orientation;
       this.renderer.view.theme = src?.image || src?.tiles ? this.settings.theme : 'broadcast';
+      this.renderer.view.notes = this.settings.notes !== 'off';
     }
     this.updateUi();
     this.redraw(false);
@@ -365,6 +408,11 @@ export class RaceGame {
     rivals.addEventListener('change', () => this.change({ rivals: Number(rivals.value) }, true));
     const diff = $<HTMLSelectElement>('g-diff');
     diff.addEventListener('change', () => this.change({ difficulty: diff.value as Difficulty }, true));
+    const notes = $<HTMLSelectElement>('g-notes');
+    notes.addEventListener('change', () => {
+      if (notes.value === 'beep') this.audio ??= new AudioContext(); // created on a user gesture so it may play
+      this.change({ notes: notes.value as RaceSettings['notes'] }, false);
+    });
     $('g-start').addEventListener('click', () => {
       if (this.active) this.begin();
     });
@@ -387,6 +435,7 @@ export class RaceGame {
     rivals.value = String(s.rivals);
     rivals.disabled = stage;
     $<HTMLSelectElement>('g-diff').value = s.difficulty;
+    $<HTMLSelectElement>('g-notes').value = s.notes;
     $<HTMLSelectElement>('g-diff').disabled = stage;
     const car = src ? CAR_PRESETS[disciplineOf(src.doc) === 'formula' ? 'formula' : 'rally'].label : '';
     $('g-info').innerHTML = src

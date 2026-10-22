@@ -5,6 +5,7 @@ import { newCar, speedOf, stepCar, type CarState, type Controls, type Env } from
 import { collide } from './collide';
 import { DRIVERS, PLAYER_DRIVER, type Driver } from './drivers';
 import { HALF_WIDTH, poseAtS, project, surfaceAtS, type GameTrack } from './track';
+import { WALL_D, WALL_MAX_PEN, wallStep } from './wall';
 
 export type Difficulty = 'easy' | 'normal' | 'hard';
 export const DIFFICULTY_PACE: Record<Difficulty, number> = { easy: 0.72, normal: 0.82, hard: 0.92 };
@@ -105,7 +106,11 @@ const BIN = 20;
 const PAD = 400;
 const GRID_FIRST = 8;
 const GRID_ROW = 7.5;
-const STEP = 1 / 90;
+/** Fixed physics step: the same at any frame rate. */
+export const PHYS_DT = 1 / 240;
+const STEP = PHYS_DT;
+/** Past this the car is on the grass (the wall normally keeps it well inside). */
+const OFF_TRACK_D = HALF_WIDTH + 4;
 
 /** Small deterministic PRNG so grids and starts are reproducible. */
 function rng(seed: number): () => number {
@@ -178,7 +183,7 @@ export const lightsLit = (g: Game): number => (g.t >= g.goTime ? 0 : Math.min(5,
 
 export function envFor(surface: 'tarmac' | 'gravel', d: number): Env {
   const grip = SURFACE_GRIP[surface];
-  const off = Math.abs(d) > HALF_WIDTH;
+  const off = Math.abs(d) > OFF_TRACK_D;
   return { lat: grip.lat * (off ? 0.55 : 1), long: grip.long * (off ? 0.5 : 1), offTrack: off };
 }
 
@@ -287,6 +292,10 @@ function tick(g: Game, ctl: Controls, h: number): void {
     }
     const others = g.racers.filter((o) => o !== r && !(o.isPlayer && o.finished)).map((o) => otherFor(g, r, o));
     stepAi(a, track, g.setup.car, others, h);
+    const lat = { d: a.d, vd: a.vd };
+    a.v *= wallStep(lat, h);
+    a.d = lat.d;
+    a.vd = lat.vd;
     const pose = poseAtS(track, a.s, a.d);
     r.car.x = pose.x;
     r.car.y = pose.y;
@@ -314,7 +323,7 @@ function tick(g: Game, ctl: Controls, h: number): void {
     const nx = -pose.ty, ny = pose.tx;
     const dx = r.car.x - pose.x, dy = r.car.y - pose.y;
     a.s += dx * pose.tx + dy * pose.ty;
-    a.d = Math.max(-HALF_WIDTH, Math.min(HALF_WIDTH, a.d + dx * nx + dy * ny));
+    a.d = Math.max(-(WALL_D + WALL_MAX_PEN), Math.min(WALL_D + WALL_MAX_PEN, a.d + dx * nx + dy * ny));
     a.v = Math.max(0, r.car.vx * pose.tx + r.car.vy * pose.ty);
     a.vd = r.car.vx * nx + r.car.vy * ny;
     if (track.closed) a.s = ((a.s % track.length) + track.length) % track.length;
@@ -329,8 +338,28 @@ function tick(g: Game, ctl: Controls, h: number): void {
       r.hint = pr.index;
       r.d = pr.d;
       r.gravel = pr.surface === 'gravel';
-      r.offTrack = Math.abs(pr.d) > HALF_WIDTH;
+      r.offTrack = Math.abs(pr.d) > OFF_TRACK_D;
       s = pr.s;
+      // soft wall at the track edge
+      const nx = -track.ty[pr.index], ny = track.tx[pr.index];
+      const lat = { d: pr.d, vd: r.car.vx * nx + r.car.vy * ny };
+      const vd0 = lat.vd;
+      const f = wallStep(lat, h);
+      if (lat.d !== pr.d) {
+        r.car.x += nx * (lat.d - pr.d);
+        r.car.y += ny * (lat.d - pr.d);
+        r.car.vx += nx * (lat.vd - vd0);
+        r.car.vy += ny * (lat.vd - vd0);
+        r.car.vx *= f;
+        r.car.vy *= f;
+        r.d = lat.d;
+        // the barrier lines the car up with the road, like a kart sliding along a tyre wall
+        const road = Math.atan2(track.ty[pr.index], track.tx[pr.index]);
+        const dir = r.car.vx * track.tx[pr.index] + r.car.vy * track.ty[pr.index] >= 0 ? 0 : Math.PI;
+        let dh = road + dir - r.car.heading;
+        dh = Math.atan2(Math.sin(dh), Math.cos(dh));
+        r.car.heading += dh * Math.min(1, 2.5 * h);
+      }
     }
     const delta = track.closed ? wrapHalf(s - r.prevS, track.length) : s - r.prevS;
     const from = r.dist;
@@ -392,3 +421,16 @@ export function finalizeResults(g: Game): Results {
 }
 
 export const playerSpeed = (g: Game): number => speedOf(g.player.car);
+
+/**
+ * Advance by real time with a fixed physics step (accumulator): the sim runs
+ * the same at 30, 60 or 144 fps. Returns the leftover time to pass back in.
+ */
+export function advance(g: Game, ctl: Controls, acc: number, dt: number): number {
+  acc += Math.min(Math.max(dt, 0), 0.1);
+  while (acc >= PHYS_DT) {
+    tick(g, ctl, PHYS_DT);
+    acc -= PHYS_DT;
+  }
+  return acc;
+}

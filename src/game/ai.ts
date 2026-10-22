@@ -64,7 +64,7 @@ export function stepAi(a: Driving, track: GameTrack, car: CarParams, others: Oth
   // lateral: smooth drift to the target lane
   const vdWant = Math.max(-MAX_LATERAL, Math.min(MAX_LATERAL, (dTarget - a.d) * 1.2));
   a.vd += Math.max(-6 * dt, Math.min(6 * dt, vdWant - a.vd));
-  a.d = Math.max(-MARGIN - 1, Math.min(MARGIN + 1, a.d + a.vd * dt));
+  a.d += a.vd * dt;
 
   // longitudinal: the profile already contains every braking zone, so just chase it within the car's limits
   const kappa = sampleAt(track, track.kappa, a.s);

@@ -28,6 +28,9 @@ All five phases done. 140 tests, `npm run build` green (81 kB JS, 30 kB gzip), v
 - Race tab (`game/` pure: track in metres + projection, arcade car physics, rail-following AI with lanes/overtaking,
   circle collisions, grid/lights/laps/positions/gaps/results; `render/game.ts`; `ui/racegame.ts`). Keys + multi-touch hold
   buttons; rally stage = solo time trial with splits; fictional drivers in `game/drivers.ts`. Tests in `tests/game/`.
+  Feel pass: soft spring-damper wall (`game/wall.ts`, player + AI), instant steering, 240 Hz fixed-step accumulator,
+  pace notes (`game/pacenotes.ts` + callout/beep), locked tile zoom + prefetch, open-wheel sprite (`render/carSprite.ts`),
+  two-circle car collisions so cars can run side by side.
 
 ## User's track (in browser-pane storage)
 - Drawn on the OSM map near JIExpo Kemayoran: 31 points, 4.593 km (Formula preset flying lap ≈ 1:16).
