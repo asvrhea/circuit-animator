@@ -143,7 +143,7 @@ export class AnimRenderer {
     return s;
   }
 
-  private drawGrid(ctx: Ctx): void {
+  drawGrid(ctx: Ctx): void {
     const step = 100 / this.race.mpu; // 100 m
     const b = this.bounds;
     const pad = Math.max(b.w, b.h) * 0.6;
@@ -241,7 +241,7 @@ export class AnimRenderer {
   }
 
   /** Chequered (or solid green) bar across the track at p, perpendicular to tangent t. */
-  private drawBar(ctx: Ctx, p: Vec2, t: Vec2, W: number, chequer: boolean): void {
+  drawBar(ctx: Ctx, p: Vec2, t: Vec2, W: number, chequer: boolean): void {
     const half = W * 0.5 + 4;
     const cells = 6, cw = (2 * half) / cells;
     ctx.save();
@@ -260,7 +260,7 @@ export class AnimRenderer {
     ctx.restore();
   }
 
-  private drawLabel(ctx: Ctx, text: string, p: Vec2, t: Vec2, W: number): void {
+  drawLabel(ctx: Ctx, text: string, p: Vec2, t: Vec2, W: number): void {
     const size = Math.max(9, W * 0.7);
     const off = W * 0.5 + size * 1.2;
     // place beside the track (left normal on screen)

@@ -1,6 +1,6 @@
 # Progress
 
-All five phases done. 94 tests, `npm run build` green (81 kB JS, 30 kB gzip), verified in the browser pane.
+All five phases done. 140 tests, `npm run build` green (81 kB JS, 30 kB gzip), verified in the browser pane.
 
 ## Done
 - 1 Scaffold: Vite 6 + TS strict + Vitest 3; dark broadcast UI, stacks on phones.
@@ -24,6 +24,10 @@ All five phases done. 94 tests, `npm run build` green (81 kB JS, 30 kB gzip), ve
   tool; KML/screenshot lines with two ends load as stages; Straighten/Corner disabled on stages (follow-up).
 - Editor tools: Straighten (two taps → exact straight via collinear helper points, start kept); Corner
   (tap → slider scales the corner about its vertex, tighter = slower in Animate). Both undoable.
+
+- Race tab (`game/` pure: track in metres + projection, arcade car physics, rail-following AI with lanes/overtaking,
+  circle collisions, grid/lights/laps/positions/gaps/results; `render/game.ts`; `ui/racegame.ts`). Keys + multi-touch hold
+  buttons; rally stage = solo time trial with splits; fictional drivers in `game/drivers.ts`. Tests in `tests/game/`.
 
 ## User's track (in browser-pane storage)
 - Drawn on the OSM map near JIExpo Kemayoran: 31 points, 4.593 km (Formula preset flying lap ≈ 1:16).

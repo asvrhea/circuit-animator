@@ -20,6 +20,7 @@ import { sampleColor, toleranceFromSlider } from '../vision/color';
 import { extractTrack, type Confidence } from '../vision/extract';
 import type { RGB } from '../vision/types';
 import { Animator } from './animator';
+import { RaceGame } from './racegame';
 import { download, fileKind, loadImage, store } from './files';
 
 type Mode = 'edit' | 'pick' | 'trace' | 'start' | 'split0' | 'split1' | 'calibrate' | 'straight' | 'corner' | 'gravel' | 'tarmac';
@@ -96,13 +97,15 @@ export class App {
   /** keep refitting on resize until the user pans or zooms */
   private autoFit: 'track' | 'image' | null = 'image';
 
-  private viewMode: 'edit' | 'animate' = 'edit';
+  private viewMode: 'edit' | 'animate' | 'race' = 'edit';
   private readonly animator: Animator;
+  private readonly racegame: RaceGame;
   /** OSM basemap visible (drawing on the map, or a track in map coordinates) */
   private mapOn = false;
   private mapViewTimer: number | undefined;
   private readonly tiles = new TileLayer(() => {
     if (this.viewMode === 'animate') this.animator.redrawIfPaused();
+    else if (this.viewMode === 'race') this.racegame.redrawIfPaused();
     else this.requestDraw();
   });
 
@@ -110,8 +113,12 @@ export class App {
     this.animator = new Animator(this.canvas, this.ctx, () =>
       this.doc ? { doc: this.doc, image: this.image, tiles: this.doc.crs === 'mercator' ? this.tiles : null } : null,
     );
+    this.racegame = new RaceGame(this.canvas, this.ctx, () =>
+      this.doc ? { doc: this.doc, image: this.image, tiles: this.doc.crs === 'mercator' ? this.tiles : null } : null,
+    );
     $('tab-edit').addEventListener('click', () => this.setView('edit'));
     $('tab-anim').addEventListener('click', () => this.setView('animate'));
+    $('tab-race').addEventListener('click', () => this.setView('race'));
     new ResizeObserver(() => this.resize()).observe(this.canvas);
     this.bindPointer();
     this.bindPanel();
@@ -131,29 +138,39 @@ export class App {
     this.canvas.height = Math.round(this.cssH * dpr);
     if (this.autoFit) this.fit(this.autoFit);
     if (this.viewMode === 'animate') this.animator.redraw(true);
+    else if (this.viewMode === 'race') this.racegame.redraw(true);
     else this.requestDraw();
   }
 
-  private setView(v: 'edit' | 'animate'): void {
-    if (v === 'animate' && !this.doc) return;
+  private setView(v: 'edit' | 'animate' | 'race'): void {
+    if (v !== 'edit' && !this.doc) return;
+    const was = this.viewMode;
     this.viewMode = v;
-    const anim = v === 'animate';
-    $('tab-edit').classList.toggle('active', !anim);
+    const anim = v === 'animate', race = v === 'race', away = v !== 'edit';
+    $('tab-edit').classList.toggle('active', v === 'edit');
     $('tab-anim').classList.toggle('active', anim);
-    for (const id of ['sec-source', 'sec-detect', 'sec-track', 'sec-map', 'sec-trace']) $(id).classList.toggle('off', anim);
-    $('attrib').hidden = anim || !this.mapOn;
+    $('tab-race').classList.toggle('active', race);
+    for (const id of ['sec-source', 'sec-detect', 'sec-track', 'sec-map', 'sec-trace']) $(id).classList.toggle('off', away);
+    $('attrib').hidden = away || !this.mapOn;
     $('sec-anim').hidden = !anim;
     $('sec-export').hidden = !anim;
-    $('sec-file').classList.toggle('off', anim); // export section has its own JSON button
+    $('sec-race').hidden = !race;
+    $('sec-file').classList.toggle('off', away); // export section has its own JSON button
     $('transport').hidden = !anim;
-    document.querySelector<HTMLElement>('.zoom')!.hidden = anim;
-    if (anim) {
+    document.querySelector<HTMLElement>('.zoom')!.hidden = away;
+    if (was === 'animate' && !anim) this.animator.exit();
+    if (was === 'race' && !race) this.racegame.exit();
+    if (race) {
+      this.setMode('edit');
+      $('hint').hidden = true;
+      this.canvas.style.cursor = 'default';
+      this.racegame.enter();
+    } else if (anim) {
       this.setMode('edit');
       $('hint').hidden = true;
       this.canvas.style.cursor = 'pointer';
       this.animator.enter();
     } else {
-      this.animator.exit();
       this.canvas.style.cursor = 'default';
       this.requestDraw();
     }
@@ -169,7 +186,7 @@ export class App {
   }
 
   private draw(): void {
-    if (this.viewMode === 'animate') return;
+    if (this.viewMode !== 'edit') return;
     const dpr = window.devicePixelRatio || 1;
     this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     const space = this.space();
@@ -448,7 +465,7 @@ export class App {
     // map units are metres: allow world view down to street level
     this.view.minScale = on ? 2e-6 : 0.05;
     this.view.maxScale = on ? 12 : 40;
-    $('attrib').hidden = !on || this.viewMode === 'animate';
+    $('attrib').hidden = !on || this.viewMode !== 'edit';
   }
 
   private drawTiles(ctx: CanvasRenderingContext2D): void {
@@ -554,6 +571,7 @@ export class App {
     c.addEventListener('pointerdown', (e) => {
       if (e.button !== 0 && e.pointerType === 'mouse') return;
       if (this.viewMode === 'animate') return this.animator.toggle();
+      if (this.viewMode === 'race') return;
       c.setPointerCapture(e.pointerId);
       const p = this.local(e);
       this.pointers.set(e.pointerId, p);
@@ -631,7 +649,7 @@ export class App {
 
     c.addEventListener('contextmenu', (e) => {
       e.preventDefault();
-      if (this.viewMode === 'animate') return;
+      if (this.viewMode !== 'edit') return;
       const i = this.hitControl(this.local(e), false);
       if (i >= 0) this.deleteControl(i);
     });
@@ -640,7 +658,7 @@ export class App {
       'wheel',
       (e) => {
         e.preventDefault();
-        if (this.viewMode === 'animate') return;
+        if (this.viewMode !== 'edit') return;
         this.autoFit = null;
         this.view.zoomAt(this.local(e), Math.exp(-e.deltaY * 0.0015));
         this.requestDraw();
@@ -667,7 +685,7 @@ export class App {
   }
 
   private hover(p: Vec2, touch: boolean): void {
-    if (touch || this.viewMode === 'animate') return;
+    if (touch || this.viewMode !== 'edit') return;
     const i = this.hitControl(p, false);
     if (i !== this.hot) {
       this.hot = i;
@@ -818,6 +836,7 @@ export class App {
       if (this.animator.onKey(e)) e.preventDefault();
       return;
     }
+    if (this.viewMode === 'race') return; // the race handles its own keys
     if (e.key === 'Escape') this.setMode('edit');
     else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') {
       e.preventDefault();
@@ -986,7 +1005,8 @@ export class App {
     $('sec-detect').hidden = !this.image;
     $('sec-track').hidden = !d;
     $<HTMLButtonElement>('tab-anim').disabled = !d;
-    if (!d && this.viewMode === 'animate') this.setView('edit');
+    $<HTMLButtonElement>('tab-race').disabled = !d;
+    if (!d && this.viewMode !== 'edit') this.setView('edit');
     $<HTMLButtonElement>('btn-save').disabled = !d;
     $<HTMLButtonElement>('btn-undo').disabled = !this.history.length;
 

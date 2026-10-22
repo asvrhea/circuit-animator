@@ -49,6 +49,16 @@ speed, so keep the tab visible; it pauses if you switch away. *PNG frame* saves 
 
 Map tiles and place search © OpenStreetMap contributors. No series, team or trademarked graphics.
 
+## Race
+
+The **Race** tab turns the current track into a simple top-down racing game (it needs a track, like Animate).
+
+- **Controls**: W / ↑ gas, S / ↓ brake then reverse, A D / ← → steer, Esc pauses. On touch devices on-screen hold buttons appear (◀ ▶ bottom-left, ▲ gas and ▼ brake bottom-right); they are multi-touch so you can steer and accelerate together. Add `?touch=1` to the URL to force them on a desktop.
+- **Driving model** (`src/game/car.ts`): real units (m, m/s) and the same car presets as Animate (Formula on circuits, Rally car on mix and stages). Steering gets less sharp with speed, tyres have a grip limit and the car slides when it is exceeded, the 12 m wide road is the limit (about 6 m each side): off it you lose most of your grip and speed, and gravel stretches have much less grip.
+- **Circuits** (formula and mix): 5–9 AI rivals with fictional drivers and 3-letter codes (nothing from real series), a 5-light start, laps, live positions and gaps, best lap and a results table. AI cars follow the speed profile (with surface grip) scaled by a skill factor, use their own lane, pass or back off slower cars, and collide with you and each other. Difficulty scales the rivals' pace.
+- **Rally stages**: no rivals. A solo time trial from START to FINISH with split times and a finish result.
+- Camera is heading-up or north-up; theme is broadcast or map (screenshot / OSM tiles), same as Animate.
+
 ## Development
 
 ```bash
